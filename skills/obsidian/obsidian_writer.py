@@ -259,6 +259,8 @@ def render_moc(title: str, fields: dict, is_draft: bool = False) -> str:
 
 # {title}
 
+# 主题地图
+
 # 概念
 {links if links else "_待补充_"}
 
@@ -394,6 +396,67 @@ def write_note(
 
 
 # ---------------------------------------------------------------------------
+# Vault init
+# ---------------------------------------------------------------------------
+
+VAULT_DIRS = [
+    ("00-Inbox", None),
+    ("01-DailyNotes", None),
+    ("02-Projects", None),
+    ("03-Knowledge", ["Concepts", "Literature", "MOCs", "Topics"]),
+    ("04-Archive", None),
+]
+
+
+def init_vault(vault: Path) -> None:
+    """Create all skill-managed directories and print the resulting tree."""
+    created = []
+    for top, subs in VAULT_DIRS:
+        top_dir = vault / top
+        if subs:
+            for sub in subs:
+                d = top_dir / sub
+                if not d.exists():
+                    d.mkdir(parents=True, exist_ok=True)
+                    created.append(str(d.relative_to(vault)))
+        else:
+            if not top_dir.exists():
+                top_dir.mkdir(parents=True, exist_ok=True)
+                created.append(top)
+
+    if created:
+        print(f"[OK] Created {len(created)} director{'y' if len(created) == 1 else 'ies'}:")
+        for d in created:
+            print(f"  + {d}/")
+    else:
+        print("[OK] All directories already exist.")
+
+    print()
+    print(str(vault) + "/")
+    for i, (top, subs) in enumerate(VAULT_DIRS):
+        is_last_top = i == len(VAULT_DIRS) - 1
+        top_pfx = "└── " if is_last_top else "├── "
+        cont_pfx = "    " if is_last_top else "│   "
+        top_dir = vault / top
+        print(f"{top_pfx}{top}/")
+        if subs:
+            for j, sub in enumerate(subs):
+                is_last_sub = j == len(subs) - 1
+                sub_pfx = cont_pfx + ("└── " if is_last_sub else "├── ")
+                file_pfx = cont_pfx + ("    " if is_last_sub else "│   ")
+                print(f"{sub_pfx}{sub}/")
+                files = sorted((top_dir / sub).glob("*.md")) if (top_dir / sub).exists() else []
+                for k, f in enumerate(files):
+                    leaf = "└── " if k == len(files) - 1 else "├── "
+                    print(f"{file_pfx}{leaf}{f.name}")
+        else:
+            files = sorted(top_dir.glob("*.md")) if top_dir.exists() else []
+            for k, f in enumerate(files):
+                leaf = "└── " if k == len(files) - 1 else "├── "
+                print(f"{cont_pfx}{leaf}{f.name}")
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -404,7 +467,7 @@ def parse_args(argv=None):
     parser.add_argument(
         "--type",
         required=True,
-        choices=list(NOTE_CONFIG.keys()) + ["fleeting"],
+        choices=list(NOTE_CONFIG.keys()) + ["fleeting", "init"],
         help="Note type",
     )
     parser.add_argument("--title", default="", help="Note title")
@@ -444,6 +507,11 @@ def main(argv=None):
 
     vault = Path(args.vault)
     note_type = args.type
+
+    # --- Init: special case ---
+    if note_type == "init":
+        init_vault(vault)
+        return
 
     # --- Fleeting: special case ---
     if note_type == "fleeting":

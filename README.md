@@ -16,11 +16,12 @@ Your Obsidian Vault
   ├── 00-Inbox/                   ← draft / incomplete notes
   ├── 01-DailyNotes/              ← fleeting notes appended here
   ├── 02-Projects/                ← project pages
-  └── 03-Knowledge/
-      ├── Concepts/               ← concept cards
-      ├── Literature/             ← article / paper notes
-      ├── MOCs/                   ← maps of content
-      └── Topics/                 ← topic summaries
+  ├── 03-Knowledge/
+  │   ├── Concepts/               ← concept cards
+  │   ├── Literature/             ← article / paper notes
+  │   ├── MOCs/                   ← maps of content
+  │   └── Topics/                 ← topic summaries
+  └── 04-Archive/                 ← archived notes
 ```
 
 ## Operations
@@ -77,6 +78,34 @@ Search the vault for related notes, merge them into a `topic` or `MOC`, and surf
 
 ```
 /obsidian organize RAG
+```
+
+### `init` — Initialize vault structure
+
+Create all required directories on first use, then print the resulting tree as confirmation. Safe to re-run — skips directories that already exist.
+
+```
+/obsidian init
+```
+
+Example output:
+
+```
+[OK] Created 8 directories:
+  + 00-Inbox/
+  + 01-DailyNotes/
+  ...
+
+D:/obsidian/
+├── 00-Inbox/
+├── 01-DailyNotes/
+├── 02-Projects/
+├── 03-Knowledge/
+│   ├── Concepts/
+│   ├── Literature/
+│   ├── MOCs/
+│   └── Topics/
+└── 04-Archive/
 ```
 
 ## Note Types
@@ -155,6 +184,9 @@ python skills/obsidian/obsidian_writer.py \
 python skills/obsidian/obsidian_writer.py \
   --type fleeting \
   --fields '{"content": "interesting idea", "tags": "#ai"}'
+
+# Initialize vault directories (first-time setup)
+python skills/obsidian/obsidian_writer.py --type init
 
 # Dry-run: preview without writing
 python skills/obsidian/obsidian_writer.py --type topic --title "RAG" \

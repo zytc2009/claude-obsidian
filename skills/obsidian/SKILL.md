@@ -13,8 +13,9 @@ You are managing the user's local Obsidian vault at `D:/obsidian/`.
 | 整理这次对话, 对话记录, 把我们的讨论存下来, log | `log` |
 | 整理归档, 搜索合并, 相关笔记, organize | `organize` |
 | 资料笔记, 文章, 论文, 博客, 概念卡, 主题页, 项目, write | `write` |
+| 初始化, 创建目录, 初次使用, init | `init` |
 
-If still unclear, ask: "你想做什么？fleeting（速记）/ capture（抓取网页/文件）/ log（整理对话）/ organize（归档整理）/ write（写笔记）"
+If still unclear, ask: "你想做什么？fleeting（速记）/ capture（抓取网页/文件）/ log（整理对话）/ organize（归档整理）/ write（写笔记）/ init（初始化目录）"
 
 ---
 
@@ -225,6 +226,18 @@ python ~/.claude/scripts/obsidian_writer.py \
 ### Step W5: 提示关联 MOC
 
 检查 `D:/obsidian/03-Knowledge/MOCs/` 下是否有相关 MOC，如有，告知用户。
+
+---
+
+## MODE: init — 初始化目录结构
+
+**Goal:** 首次使用时创建 vault 所需的所有目录，完成后展示目录树确认。
+
+```bash
+python ~/.claude/scripts/obsidian_writer.py --type init
+```
+
+直接展示脚本输出，无需额外处理。
 
 ---
 
