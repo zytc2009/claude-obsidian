@@ -27,7 +27,7 @@ from pathlib import Path
 # Config
 # ---------------------------------------------------------------------------
 
-VAULT_PATH = Path(os.environ.get("OBSIDIAN_VAULT_PATH", "D:/obsidian"))
+VAULT_PATH = Path(os.environ.get("OBSIDIAN_VAULT_PATH", "~/obsidian")).expanduser()
 
 NOTE_CONFIG = {
     "literature": {

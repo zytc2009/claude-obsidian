@@ -2,7 +2,7 @@
 description: Write and organize notes in the Obsidian knowledge base. Handles quick fleeting notes, web/file capture, conversation logging, and archiving related notes. Triggered by /obsidian, or natural language like "记一下", "帮我整理这次对话", "抓取这个网页", "把这些笔记归档".
 ---
 
-You are managing the user's local Obsidian vault at `D:/obsidian/`.
+You are managing the user's local Obsidian vault. The default path is `~/obsidian/`, but check the `OBSIDIAN_VAULT_PATH` environment variable first — the user may have configured a custom path.
 
 ## Step 1: Detect Operation Mode
 
@@ -136,8 +136,8 @@ python ~/.claude/scripts/obsidian_writer.py \
 ### Step O1: 搜索相关笔记
 
 用 Glob 和 Grep 工具在 vault 中搜索：
-- `D:/obsidian/03-Knowledge/**/*.md`
-- `D:/obsidian/00-Inbox/*.md`
+- `$OBSIDIAN_VAULT_PATH/03-Knowledge/**/*.md`
+- `$OBSIDIAN_VAULT_PATH/00-Inbox/*.md`
 
 按关键词搜索标题和内容，列出匹配的笔记文件。
 
@@ -253,8 +253,8 @@ python ~/.claude/scripts/obsidian_writer.py --type init
 ### Step Q1: 搜索相关笔记
 
 用 Grep 工具在以下位置搜索用户问题中的关键词：
-- `D:/obsidian/03-Knowledge/**/*.md`
-- `D:/obsidian/02-Projects/**/*.md`
+- `$OBSIDIAN_VAULT_PATH/03-Knowledge/**/*.md`
+- `$OBSIDIAN_VAULT_PATH/02-Projects/**/*.md`
 
 搜索标题和正文，列出匹配文件。
 

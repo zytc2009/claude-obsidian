@@ -210,7 +210,7 @@ python install.py
 
 安装脚本将 `skills/obsidian/obsidian_writer.py` 复制到 `~/.claude/scripts/`，将 `skills/obsidian/` 复制到 `~/.claude/skills/obsidian/`。
 
-**配置 vault 路径**（默认：`./obsidian`）：
+**配置 vault 路径**（默认：`~/obsidian/`）：
 
 ```bash
 # 方式一：环境变量

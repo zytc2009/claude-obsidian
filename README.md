@@ -208,7 +208,7 @@ python install.py
 
 This copies `skills/obsidian/obsidian_writer.py` to `~/.claude/scripts/` and `skills/obsidian/` to `~/.claude/skills/obsidian/`.
 
-**Configure your vault path** (default: `./obsidian`):
+**Configure your vault path** (default: `~/obsidian/`):
 
 ```bash
 # Option 1: environment variable
