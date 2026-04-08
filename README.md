@@ -4,7 +4,7 @@ A Claude Code skill that writes structured notes directly into your local Obsidi
 
 ## Overview
 
-`claude-obsidian` bridges Claude Code sessions and Obsidian. You can capture fleeting thoughts, archive web articles, log conversations as notes, and merge related notes into topic summaries — all from natural language or `/obsidian`.
+`claude-obsidian` bridges Claude Code sessions and Obsidian. You can capture fleeting thoughts, archive web articles, log conversations as notes, merge related notes into topic summaries, query your knowledge base, and keep your vault healthy — all from natural language or `/obsidian`.
 
 **Architecture:**
 ```
@@ -78,6 +78,58 @@ Search the vault for related notes, merge them into a `topic` or `MOC`, and surf
 
 ```
 /obsidian organize RAG
+```
+
+### `query` — Query your knowledge base
+
+Search existing notes and answer questions with citations. Optionally archive the answer as a new topic note.
+
+```
+/obsidian query what do my notes say about RAG?
+在我笔记里查一下 Transformer 的局限性
+```
+
+Each claim in the answer is cited back to its source note: `answer text — [[Concept - Self-Attention]]`.
+
+### `lint` — Vault health check
+
+Scan the vault for quality issues and optionally auto-fix simple ones.
+
+```
+/obsidian lint
+/obsidian lint --auto-fix
+```
+
+| Check | Description | Action |
+|-------|-------------|--------|
+| Broken links | `[[wikilinks]]` pointing to non-existent notes | Reported |
+| Orphan notes | Knowledge/Projects notes not referenced from any MOC/Topic | Reported |
+| Inbox backlog | Notes stuck in `00-Inbox` for more than 7 days | Reported |
+| Skeleton notes | Notes with more than 50% `_placeholder_` fields | Reported |
+| Stale notes | Active notes not updated in 90+ days | Reported |
+| Missing frontmatter | Notes lacking `status`/`created`/`updated` | Auto-fixed with `--auto-fix` |
+
+Example output:
+```
+[Lint] Scanned 47 notes in D:/obsidian/
+
+[Broken links] (1)
+⚠ 03-Knowledge/MOCs/MOC - AI Learning.md → [[Concept - GPT5]]
+
+[Orphan notes] (2)
+⚠ 03-Knowledge/Concepts/Concept - LoRA.md
+⚠ 03-Knowledge/Literature/Literature - RAG Survey.md
+
+[Inbox backlog] (1)
+⚠ 00-Inbox/Literature - Some Draft.md (11 days old)
+```
+
+### `index` — Rebuild knowledge index
+
+Rebuild `_index.md` at the vault root — a global navigation page listing all notes by section with summaries and dates. New notes are added to the index automatically after every `write` or `capture`.
+
+```
+/obsidian index
 ```
 
 ### `init` — Initialize vault structure
@@ -177,7 +229,7 @@ python obsidian_writer.py --vault /path/to/vault ...
 python skills/obsidian/obsidian_writer.py \
   --type literature \
   --title "Attention Is All You Need" \
-  --fields '{"core ideas": "...", "method details": "..."}' \
+  --fields '{"核心观点": "...", "方法要点": "..."}' \
   --draft false
 
 # Append a fleeting note
@@ -187,6 +239,15 @@ python skills/obsidian/obsidian_writer.py \
 
 # Initialize vault directories (first-time setup)
 python skills/obsidian/obsidian_writer.py --type init
+
+# Vault health check (report only)
+python skills/obsidian/obsidian_writer.py --type lint
+
+# Vault health check with auto-fix (repairs missing frontmatter)
+python skills/obsidian/obsidian_writer.py --type lint --auto-fix
+
+# Rebuild global index (_index.md)
+python skills/obsidian/obsidian_writer.py --type index
 
 # Dry-run: preview without writing
 python skills/obsidian/obsidian_writer.py --type topic --title "RAG" \
@@ -203,7 +264,7 @@ python -m pytest
 python -m pytest --cov=scripts
 ```
 
-The test suite covers all note types, fleeting append logic, draft routing, filename collision handling, and the CLI.
+The test suite covers all note types, fleeting append logic, draft routing, filename collision handling, lint checks, link suggestions, index generation, and the CLI (80 tests).
 
 ## File naming
 
