@@ -1,21 +1,28 @@
 import subprocess
 import sys
 import tempfile
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from skills.obsidian.obsidian_writer import (
     NOTE_CONFIG,
+    _INDEX_FILE,
+    _append_to_index,
+    _extract_wikilinks,
+    _parse_frontmatter,
     append_fleeting,
     get_target_path,
     is_draft_by_content,
+    lint_vault,
     make_filename,
+    rebuild_index,
     render_concept,
     render_literature,
     render_project,
     render_topic,
+    suggest_links,
     write_note,
 )
 
@@ -327,6 +334,301 @@ class TestWriteNote:
             assert path.exists()
             assert "Concept - Transformer.md" == path.name
             assert "自注意力架构" in path.read_text(encoding="utf-8")
+
+
+class TestParseFrontmatter:
+    def test_extracts_basic_fields(self):
+        text = "---\ntype: literature\nstatus: active\n---\n# body"
+        fm = _parse_frontmatter(text)
+        assert fm["type"] == "literature"
+        assert fm["status"] == "active"
+
+    def test_returns_empty_when_no_frontmatter(self):
+        assert _parse_frontmatter("# just a heading") == {}
+
+    def test_returns_empty_when_unclosed(self):
+        assert _parse_frontmatter("---\ntype: foo\n") == {}
+
+
+class TestExtractWikilinks:
+    def test_extracts_simple_link(self):
+        assert "Concept - RAG" in _extract_wikilinks("see [[Concept - RAG]] here")
+
+    def test_strips_display_text(self):
+        assert "Concept - RAG" in _extract_wikilinks("[[Concept - RAG|RAG]]")
+
+    def test_strips_heading_anchor(self):
+        assert "Concept - RAG" in _extract_wikilinks("[[Concept - RAG#section]]")
+
+    def test_returns_empty_set_for_plain_text(self):
+        assert _extract_wikilinks("no links here") == set()
+
+    def test_extracts_multiple_links(self):
+        links = _extract_wikilinks("[[A]] and [[B]]")
+        assert "A" in links and "B" in links
+
+
+class TestLintVault:
+    def _make_vault(self, tmp: str) -> Path:
+        vault = Path(tmp)
+        for d in ["00-Inbox", "01-DailyNotes", "02-Projects",
+                  "03-Knowledge/Concepts", "03-Knowledge/Literature",
+                  "03-Knowledge/MOCs", "03-Knowledge/Topics", "04-Archive"]:
+            (vault / d).mkdir(parents=True, exist_ok=True)
+        return vault
+
+    def _write(self, path: Path, content: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+
+    def test_no_issues_on_clean_vault(self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self._make_vault(tmp)
+            lint_vault(vault)
+            out = capsys.readouterr().out
+            assert "No issues found" in out
+
+    def test_detects_broken_wikilink(self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self._make_vault(tmp)
+            self._write(
+                vault / "03-Knowledge/MOCs/MOC - AI.md",
+                "---\ntype: moc\nstatus: active\ncreated: 2026-04-01\nupdated: 2026-04-01\n---\n"
+                "see [[Concept - NonExistent]]\n"
+            )
+            lint_vault(vault)
+            out = capsys.readouterr().out
+            assert "Concept - NonExistent" in out
+            assert "Broken links" in out
+
+    def test_detects_orphan_note(self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self._make_vault(tmp)
+            # A concept note not referenced by anyone
+            self._write(
+                vault / "03-Knowledge/Concepts/Concept - Orphan.md",
+                "---\ntype: concept\nstatus: active\ncreated: 2026-04-01\nupdated: 2026-04-01\n---\n# content\n"
+            )
+            lint_vault(vault)
+            out = capsys.readouterr().out
+            assert "Orphan" in out
+            assert "Concept - Orphan" in out
+
+    def test_referenced_note_not_orphan(self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self._make_vault(tmp)
+            self._write(
+                vault / "03-Knowledge/Concepts/Concept - Referenced.md",
+                "---\ntype: concept\nstatus: active\ncreated: 2026-04-01\nupdated: 2026-04-01\n---\n# content\n"
+            )
+            self._write(
+                vault / "03-Knowledge/MOCs/MOC - AI.md",
+                "---\ntype: moc\nstatus: active\ncreated: 2026-04-01\nupdated: 2026-04-01\n---\n"
+                "[[Concept - Referenced]]\n"
+            )
+            lint_vault(vault)
+            out = capsys.readouterr().out
+            # Should not report orphan for the referenced concept
+            assert "Concept - Referenced" not in out or "Orphan" not in out
+
+    def test_detects_inbox_backlog(self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self._make_vault(tmp)
+            old_date = (date.today() - timedelta(days=10)).strftime("%Y-%m-%d")
+            self._write(
+                vault / "00-Inbox/Literature - Old Draft.md",
+                f"---\ntype: literature\nstatus: draft\ncreated: {old_date}\nupdated: {old_date}\n---\n"
+            )
+            lint_vault(vault)
+            out = capsys.readouterr().out
+            assert "Inbox backlog" in out
+            assert "Literature - Old Draft" in out
+
+    def test_fresh_inbox_note_not_flagged(self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self._make_vault(tmp)
+            today_str = date.today().strftime("%Y-%m-%d")
+            self._write(
+                vault / "00-Inbox/Literature - New Draft.md",
+                f"---\ntype: literature\nstatus: draft\ncreated: {today_str}\nupdated: {today_str}\n---\n"
+            )
+            lint_vault(vault)
+            out = capsys.readouterr().out
+            assert "Inbox backlog" not in out
+
+    def test_detects_skeleton_note(self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self._make_vault(tmp)
+            self._write(
+                vault / "03-Knowledge/Topics/Topic - Skeleton.md",
+                "---\ntype: topic\nstatus: active\ncreated: 2026-04-01\nupdated: 2026-04-01\n---\n"
+                "# section1\n_待补充_\n# section2\n_待补充_\n# section3\n_待补充_\n# section4\nsome content\n"
+            )
+            lint_vault(vault)
+            out = capsys.readouterr().out
+            assert "Skeleton" in out
+            assert "Topic - Skeleton" in out
+
+    def test_detects_stale_note(self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self._make_vault(tmp)
+            old_date = (date.today() - timedelta(days=100)).strftime("%Y-%m-%d")
+            self._write(
+                vault / "03-Knowledge/Concepts/Concept - Stale.md",
+                f"---\ntype: concept\nstatus: active\ncreated: {old_date}\nupdated: {old_date}\n---\n# content\nsome text\n"
+            )
+            lint_vault(vault)
+            out = capsys.readouterr().out
+            assert "Stale" in out
+            assert "Concept - Stale" in out
+
+    def test_auto_fix_adds_missing_frontmatter_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self._make_vault(tmp)
+            note = vault / "03-Knowledge/Concepts/Concept - NoStatus.md"
+            self._write(note, "---\ntype: concept\n---\n# content\n")
+            lint_vault(vault, auto_fix=True)
+            content = note.read_text(encoding="utf-8")
+            assert "status:" in content
+            assert "created:" in content
+
+    def test_cli_lint_runs_successfully(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = subprocess.run(
+                [sys.executable, "skills/obsidian/obsidian_writer.py",
+                 "--type", "lint", "--vault", tmp],
+                capture_output=True, text=True, encoding="utf-8",
+                cwd="D:/AI/claude_code/claude-obsidian",
+            )
+            assert result.returncode == 0
+            assert "[Lint]" in result.stdout
+
+
+class TestSuggestLinks:
+    def _make_vault(self, tmp: str) -> Path:
+        vault = Path(tmp)
+        for d in ["03-Knowledge/MOCs", "03-Knowledge/Topics",
+                  "03-Knowledge/Literature", "03-Knowledge/Concepts"]:
+            (vault / d).mkdir(parents=True, exist_ok=True)
+        return vault
+
+    def _write(self, path: Path, content: str) -> None:
+        path.write_text(content, encoding="utf-8")
+
+    def test_suggests_moc_that_mentions_keyword(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self._make_vault(tmp)
+            moc = vault / "03-Knowledge/MOCs/MOC - Transformer.md"
+            self._write(moc, "---\ntype: moc\n---\n# 资料\nsome Transformer content\n")
+            new_note = vault / "03-Knowledge/Literature/Literature - Transformer Survey.md"
+            self._write(new_note, "---\ntype: literature\n---\ncontent\n")
+            suggestions = suggest_links(vault, new_note)
+            paths = [str(s[0]) for s in suggestions]
+            assert any("MOC - Transformer" in p for p in paths)
+
+    def test_no_suggestion_when_already_linked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self._make_vault(tmp)
+            new_note = vault / "03-Knowledge/Literature/Literature - Attention Survey.md"
+            self._write(new_note, "---\ntype: literature\n---\ncontent\n")
+            moc = vault / "03-Knowledge/MOCs/MOC - Attention.md"
+            self._write(moc, f"---\ntype: moc\n---\n[[Literature - Attention Survey]]\n")
+            suggestions = suggest_links(vault, new_note)
+            paths = [str(s[0]) for s in suggestions]
+            assert not any("MOC - Attention" in p for p in paths)
+
+    def test_no_suggestion_when_no_keyword_match(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self._make_vault(tmp)
+            moc = vault / "03-Knowledge/MOCs/MOC - Cooking.md"
+            self._write(moc, "---\ntype: moc\n---\n# 资料\nrecipes and food\n")
+            new_note = vault / "03-Knowledge/Literature/Literature - Quantum Computing.md"
+            self._write(new_note, "---\ntype: literature\n---\ncontent\n")
+            suggestions = suggest_links(vault, new_note)
+            assert suggestions == []
+
+    def test_suggests_topic_as_well_as_moc(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self._make_vault(tmp)
+            topic = vault / "03-Knowledge/Topics/Topic - Attention Mechanism.md"
+            self._write(topic, "---\ntype: topic\n---\n# 重要资料\nAttention research\n")
+            new_note = vault / "03-Knowledge/Literature/Literature - Attention Survey.md"
+            self._write(new_note, "---\ntype: literature\n---\ncontent\n")
+            suggestions = suggest_links(vault, new_note)
+            paths = [str(s[0]) for s in suggestions]
+            assert any("Topic - Attention" in p for p in paths)
+
+
+class TestRebuildIndex:
+    def _make_vault(self, tmp: str) -> Path:
+        vault = Path(tmp)
+        for d in ["02-Projects", "03-Knowledge/Topics", "03-Knowledge/MOCs",
+                  "03-Knowledge/Concepts", "03-Knowledge/Literature"]:
+            (vault / d).mkdir(parents=True, exist_ok=True)
+        return vault
+
+    def _write(self, path: Path, content: str) -> None:
+        path.write_text(content, encoding="utf-8")
+
+    def test_creates_index_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self._make_vault(tmp)
+            index_path = rebuild_index(vault)
+            assert index_path.exists()
+            assert index_path.name == _INDEX_FILE
+
+    def test_index_contains_note_stem(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self._make_vault(tmp)
+            today = date.today().strftime("%Y-%m-%d")
+            self._write(
+                vault / "03-Knowledge/Concepts/Concept - Transformer.md",
+                f"---\ntype: concept\nstatus: active\nupdated: {today}\n---\n# content\n"
+            )
+            rebuild_index(vault)
+            text = (vault / _INDEX_FILE).read_text(encoding="utf-8")
+            assert "Concept - Transformer" in text
+
+    def test_index_has_section_headers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self._make_vault(tmp)
+            today = date.today().strftime("%Y-%m-%d")
+            self._write(
+                vault / "03-Knowledge/Literature/Literature - Test.md",
+                f"---\ntype: literature\nstatus: active\nupdated: {today}\n---\n"
+            )
+            rebuild_index(vault)
+            text = (vault / _INDEX_FILE).read_text(encoding="utf-8")
+            assert "## Literature" in text
+
+    def test_write_note_increments_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self._make_vault(tmp)
+            rebuild_index(vault)
+            write_note(vault, "concept", "Self-Attention",
+                       {"一句话定义": "key mechanism", "核心机制": "dot product"},
+                       is_draft=False)
+            text = (vault / _INDEX_FILE).read_text(encoding="utf-8")
+            assert "Concept - Self-Attention" in text
+
+    def test_draft_note_not_added_to_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self._make_vault(tmp)
+            rebuild_index(vault)
+            write_note(vault, "literature", "Draft Paper", {}, is_draft=True)
+            text = (vault / _INDEX_FILE).read_text(encoding="utf-8")
+            assert "Draft Paper" not in text
+
+    def test_cli_index_runs_successfully(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = subprocess.run(
+                [sys.executable, "skills/obsidian/obsidian_writer.py",
+                 "--type", "index", "--vault", tmp],
+                capture_output=True, text=True, encoding="utf-8",
+                cwd="D:/AI/claude_code/claude-obsidian",
+            )
+            assert result.returncode == 0
+            assert "[OK] Index rebuilt" in result.stdout
 
 
 class TestCLI:

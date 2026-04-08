@@ -18,15 +18,16 @@ Usage:
 import argparse
 import json
 import os
+import re
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
-VAULT_PATH = Path(os.environ.get("OBSIDIAN_VAULT_PATH", "D:/obsidian"))
+VAULT_PATH = Path(os.environ.get("OBSIDIAN_VAULT_PATH", "~/obsidian")).expanduser()
 
 NOTE_CONFIG = {
     "literature": {
@@ -392,6 +393,20 @@ def write_note(
 
     content = RENDERERS[note_type](title, fields, is_draft)
     filepath.write_text(content, encoding="utf-8")
+
+    # Incrementally update _index.md (skip drafts — they live in Inbox)
+    if not is_draft:
+        section_map = {
+            "literature": "Literature",
+            "concept": "Concepts",
+            "topic": "Topics",
+            "project": "Projects",
+            "moc": "MOCs",
+        }
+        section = section_map.get(note_type)
+        if section:
+            _append_to_index(vault, filepath, section)
+
     return filepath
 
 
@@ -457,6 +472,349 @@ def init_vault(vault: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Link suggestion
+# ---------------------------------------------------------------------------
+
+def suggest_links(vault: Path, new_note_path: Path) -> list:
+    """Return MOC/Topic files that likely should link to the new note.
+
+    Heuristic: search MOCs and Topics for any word from the new note's stem
+    that is ≥ 4 characters, to avoid spurious matches on short tokens.
+    Returns a list of (relative_path, section_hint) tuples.
+    """
+    stem = new_note_path.stem  # e.g. "Literature - Attention Is All You Need"
+    # Extract meaningful words (≥4 chars, not common stop words)
+    _STOP = {"with", "from", "that", "this", "into", "over", "under",
+              "about", "have", "been", "were", "will", "does", "their"}
+    words = [
+        w for w in re.split(r"[\s\-_]+", stem)
+        if len(w) >= 4 and w.lower() not in _STOP and not w.startswith(("Literature", "Concept", "Topic", "Project", "MOC"))
+    ]
+    if not words:
+        return []
+
+    candidates = []
+    for search_dir in ["03-Knowledge/MOCs", "03-Knowledge/Topics"]:
+        target_dir = vault / search_dir
+        if not target_dir.exists():
+            continue
+        for md_file in target_dir.glob("*.md"):
+            if md_file == new_note_path:
+                continue
+            try:
+                text = md_file.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            # Already links to the new note?
+            if new_note_path.stem in text:
+                continue
+            # Any keyword match?
+            lower_text = text.lower()
+            if any(w.lower() in lower_text for w in words):
+                fm_type = _parse_frontmatter(text).get("type", "")
+                section = "# 资料" if fm_type == "moc" else "# 重要资料"
+                candidates.append((md_file.relative_to(vault), section))
+
+    return candidates
+
+
+# ---------------------------------------------------------------------------
+# Index maintenance
+# ---------------------------------------------------------------------------
+
+_INDEX_FILE = "_index.md"
+
+_INDEX_DIRS = [
+    ("02-Projects", "Projects"),
+    ("03-Knowledge/Topics", "Topics"),
+    ("03-Knowledge/MOCs", "MOCs"),
+    ("03-Knowledge/Concepts", "Concepts"),
+    ("03-Knowledge/Literature", "Literature"),
+]
+
+
+def _index_entry(note_path: Path, vault: Path) -> str:
+    """Return a single index line for a note."""
+    fm = _parse_frontmatter(
+        note_path.read_text(encoding="utf-8", errors="replace")
+    )
+    summary = (
+        fm.get("主题说明") or fm.get("一句话定义") or fm.get("解决的问题") or ""
+    ).strip()
+    updated = fm.get("updated", "")
+    parts = [f"- [[{note_path.stem}]]"]
+    if summary:
+        parts.append(f" — {summary[:60]}")
+    if updated:
+        parts.append(f" ({updated})")
+    return "".join(parts)
+
+
+def rebuild_index(vault: Path) -> Path:
+    """Rebuild _index.md from scratch by scanning all managed directories."""
+    today = date.today().strftime("%Y-%m-%d")
+    lines = [
+        "---",
+        "type: index",
+        f"updated: {today}",
+        "---",
+        "",
+        "# Knowledge Base Index",
+        "",
+        f"_Last rebuilt: {today}_",
+        "",
+    ]
+
+    for rel_dir, section_name in _INDEX_DIRS:
+        target = vault / rel_dir
+        if not target.exists():
+            continue
+        notes = sorted(target.glob("*.md"))
+        if not notes:
+            continue
+        lines.append(f"## {section_name} ({len(notes)})")
+        for note in notes:
+            lines.append(_index_entry(note, vault))
+        lines.append("")
+
+    # Recent notes (last 7 days)
+    recent_threshold = date.today() - timedelta(days=7)
+    recent = []
+    for rel_dir, _ in _INDEX_DIRS:
+        target = vault / rel_dir
+        if not target.exists():
+            continue
+        for note in target.glob("*.md"):
+            fm = _parse_frontmatter(
+                note.read_text(encoding="utf-8", errors="replace")
+            )
+            updated_str = fm.get("updated", "")
+            if updated_str:
+                try:
+                    if date.fromisoformat(updated_str) >= recent_threshold:
+                        recent.append((updated_str, note.stem))
+                except ValueError:
+                    pass
+
+    if recent:
+        recent.sort(reverse=True)
+        lines.append("## Recent (last 7 days)")
+        for updated, stem in recent[:10]:
+            lines.append(f"- {updated}: [[{stem}]]")
+        lines.append("")
+
+    index_path = vault / _INDEX_FILE
+    index_path.write_text("\n".join(lines), encoding="utf-8")
+    return index_path
+
+
+def _append_to_index(vault: Path, note_path: Path, section_name: str) -> None:
+    """Incrementally add a new note entry to the relevant section in _index.md."""
+    index_path = vault / _INDEX_FILE
+    if not index_path.exists():
+        rebuild_index(vault)
+        return
+
+    text = index_path.read_text(encoding="utf-8")
+    # Already listed?
+    if note_path.stem in text:
+        return
+
+    entry = _index_entry(note_path, vault)
+    header = f"## {section_name}"
+    if header in text:
+        # Insert after the section header (before the next blank line or section)
+        lines = text.splitlines(keepends=True)
+        insert_at = len(lines)
+        in_section = False
+        for i, line in enumerate(lines):
+            if line.strip() == header:
+                in_section = True
+                continue
+            if in_section and (line.startswith("## ") or line.strip() == ""):
+                insert_at = i
+                break
+        lines.insert(insert_at, entry + "\n")
+        index_path.write_text("".join(lines), encoding="utf-8")
+    else:
+        # Section missing — full rebuild
+        rebuild_index(vault)
+
+
+# ---------------------------------------------------------------------------
+# Lint helpers
+# ---------------------------------------------------------------------------
+
+def _parse_frontmatter(text: str) -> dict:
+    """Extract YAML frontmatter as a plain key:value dict."""
+    if not text.startswith("---"):
+        return {}
+    end = text.find("---", 3)
+    if end == -1:
+        return {}
+    result = {}
+    for line in text[3:end].splitlines():
+        if ":" in line:
+            key, _, val = line.partition(":")
+            result[key.strip()] = val.strip()
+    return result
+
+
+def _extract_wikilinks(text: str) -> set:
+    """Return all wikilink targets from text, stripping heading anchors."""
+    pattern = r"\[\[([^\]|#]+)(?:[#|][^\]]*)?\]\]"
+    return {m.group(1).strip() for m in re.finditer(pattern, text)}
+
+
+def _fix_frontmatter(text: str, path: Path, fm: dict) -> tuple:
+    """Add missing required frontmatter fields. Return (new_text, list_of_fixes)."""
+    today = date.today().strftime("%Y-%m-%d")
+    defaults = {
+        "status": "active",
+        "created": today,
+        "updated": today,
+        "reviewed": "false",
+    }
+    missing = {k: v for k, v in defaults.items() if k not in fm}
+    if not missing:
+        return text, []
+
+    # Insert missing keys before the closing ---
+    end = text.find("---", 3)
+    insert_lines = "".join(f"{k}: {v}\n" for k, v in missing.items())
+    new_text = text[:end] + insert_lines + text[end:]
+    fixes = [f"{path.name}: added missing frontmatter field(s): {', '.join(missing)}"]
+    return new_text, fixes
+
+
+# ---------------------------------------------------------------------------
+# Lint
+# ---------------------------------------------------------------------------
+
+_INBOX_BACKLOG_DAYS = 7
+_STALE_DAYS = 90
+_SKELETON_RATIO = 0.5   # fraction of _待补充_ sections that triggers "skeleton"
+
+_SKIP_LINT_DIRS = {"01-DailyNotes", "04-Archive"}
+_KNOWLEDGE_DIRS = {"02-Projects", "03-Knowledge"}
+
+
+def lint_vault(vault: Path, auto_fix: bool = False) -> None:
+    """Scan vault for quality issues, optionally auto-fix simple ones."""
+    all_notes = list(vault.rglob("*.md"))
+    note_stems = {f.stem for f in all_notes}
+
+    # Read all note contents once
+    contents: dict[Path, str] = {}
+    for f in all_notes:
+        try:
+            contents[f] = f.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            contents[f] = ""
+
+    today = date.today()
+    auto_fixes = []
+    broken: list[str] = []
+    orphans: list[str] = []
+    inbox_backlog: list[str] = []
+    skeletons: list[str] = []
+    stale: list[str] = []
+
+    # Build set of all referenced note stems across all files
+    referenced: set = set()
+    for text in contents.values():
+        for link in _extract_wikilinks(text):
+            referenced.add(link)
+
+    for note_path, text in contents.items():
+        rel = note_path.relative_to(vault)
+        top_dir = rel.parts[0] if rel.parts else ""
+        fm = _parse_frontmatter(text)
+
+        # --- Auto-fix: missing frontmatter fields ---
+        if auto_fix and text.startswith("---"):
+            new_text, fixes = _fix_frontmatter(text, note_path, fm)
+            if fixes:
+                note_path.write_text(new_text, encoding="utf-8")
+                contents[note_path] = new_text
+                auto_fixes.extend(fixes)
+
+        # --- Broken wikilinks ---
+        broken_here = [
+            lnk for lnk in _extract_wikilinks(text)
+            if lnk and lnk not in note_stems
+        ]
+        for lnk in broken_here:
+            broken.append(f"  {rel} → [[{lnk}]]")
+
+        if top_dir in _SKIP_LINT_DIRS:
+            continue
+
+        # --- Orphan notes (Knowledge + Projects, not referenced anywhere) ---
+        if top_dir in _KNOWLEDGE_DIRS and note_path.stem not in referenced:
+            orphans.append(f"  {rel}")
+
+        # --- Inbox backlog ---
+        if top_dir == "00-Inbox":
+            created_str = fm.get("created", "")
+            if created_str:
+                try:
+                    age = (today - date.fromisoformat(created_str)).days
+                    if age > _INBOX_BACKLOG_DAYS:
+                        inbox_backlog.append(f"  {rel} ({age} days old)")
+                except ValueError:
+                    pass
+
+        # --- Skeleton notes ---
+        placeholder_count = text.count("_待补充_")
+        section_count = len(re.findall(r"^#+\s", text, re.MULTILINE))
+        if section_count > 0 and placeholder_count / section_count > _SKELETON_RATIO:
+            skeletons.append(
+                f"  {rel} ({placeholder_count}/{section_count} sections empty)"
+            )
+
+        # --- Stale notes (active, not updated in 90+ days) ---
+        if fm.get("status") == "active":
+            updated_str = fm.get("updated", "")
+            if updated_str:
+                try:
+                    age = (today - date.fromisoformat(updated_str)).days
+                    if age > _STALE_DAYS:
+                        stale.append(f"  {rel} ({age} days since update)")
+                except ValueError:
+                    pass
+
+    # --- Print report ---
+    total = len(all_notes)
+    print(f"[Lint] Scanned {total} note(s) in {vault}\n")
+
+    if auto_fixes:
+        print(f"[Auto-fixed] ({len(auto_fixes)})")
+        for f in auto_fixes:
+            print(f"  ✓ {f}")
+        print()
+
+    sections = [
+        ("[Broken links]", broken),
+        ("[Orphan notes] (not referenced from any MOC/Topic)", orphans),
+        ("[Inbox backlog] (stuck >7 days)", inbox_backlog),
+        ("[Skeleton notes] (>50% fields empty)", skeletons),
+        ("[Stale notes] (not updated in 90+ days)", stale),
+    ]
+    found_issues = False
+    for header, items in sections:
+        if items:
+            found_issues = True
+            print(f"{header} ({len(items)})")
+            for item in items:
+                print(f"⚠{item}")
+            print()
+
+    if not found_issues and not auto_fixes:
+        print("✓ No issues found.")
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -467,8 +825,13 @@ def parse_args(argv=None):
     parser.add_argument(
         "--type",
         required=True,
-        choices=list(NOTE_CONFIG.keys()) + ["fleeting", "init"],
+        choices=list(NOTE_CONFIG.keys()) + ["fleeting", "init", "lint", "index"],
         help="Note type",
+    )
+    parser.add_argument(
+        "--auto-fix",
+        action="store_true",
+        help="Auto-fix simple issues (missing frontmatter fields) during lint",
     )
     parser.add_argument("--title", default="", help="Note title")
     parser.add_argument(
@@ -511,6 +874,17 @@ def main(argv=None):
     # --- Init: special case ---
     if note_type == "init":
         init_vault(vault)
+        return
+
+    # --- Lint: special case ---
+    if note_type == "lint":
+        lint_vault(vault, auto_fix=args.auto_fix)
+        return
+
+    # --- Index: special case ---
+    if note_type == "index":
+        index_path = rebuild_index(vault)
+        print(f"[OK] Index rebuilt: {index_path.relative_to(vault)}")
         return
 
     # --- Fleeting: special case ---
@@ -558,6 +932,12 @@ def main(argv=None):
 
     rel_path = filepath.relative_to(vault)
     print(f"[OK] Written: {rel_path}")
+
+    suggestions = suggest_links(vault, filepath)
+    if suggestions:
+        print("\n[Link suggestions]")
+        for rel, section in suggestions:
+            print(f"  → {rel}  ({section}  ← add [[{filepath.stem}]])")
 
 
 if __name__ == "__main__":
