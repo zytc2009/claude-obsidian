@@ -14,8 +14,11 @@ You are managing the user's local Obsidian vault at `D:/obsidian/`.
 | 整理归档, 搜索合并, 相关笔记, organize | `organize` |
 | 资料笔记, 文章, 论文, 博客, 概念卡, 主题页, 项目, write | `write` |
 | 初始化, 创建目录, 初次使用, init | `init` |
+| 检查知识库, lint, vault 健康检查, 断链, 孤立笔记 | `lint` |
+| 在笔记里查, 知识库搜索, query, 我笔记里有关…的内容 | `query` |
+| 重建索引, 更新 index, 生成目录, rebuild index | `index` |
 
-If still unclear, ask: "你想做什么？fleeting（速记）/ capture（抓取网页/文件）/ log（整理对话）/ organize（归档整理）/ write（写笔记）/ init（初始化目录）"
+If still unclear, ask: "你想做什么？fleeting（速记）/ capture（抓取网页/文件）/ log（整理对话）/ organize（归档整理）/ write（写笔记）/ query（知识库问答）/ lint（健康检查）/ init（初始化目录）"
 
 ---
 
@@ -83,9 +86,10 @@ python ~/.claude/scripts/obsidian_writer.py \
 
 如果提取字段不到一半（`核心观点` 和 `方法要点` 都空），设 `--draft true`。
 
-### Step C5: 提示关联 MOC
+### Step C5: 关联建议
 
-检查 `D:/obsidian/03-Knowledge/MOCs/` 下是否有相关 MOC，如有，告知用户可手动添加链接。
+脚本会自动输出 `[Link suggestions]`，展示给用户，并询问是否自动添加链接。
+如果用户确认，用 Read + Edit 工具将 `[[新笔记名]]` 添加到建议的区块末尾。
 
 ---
 
@@ -223,9 +227,10 @@ python ~/.claude/scripts/obsidian_writer.py \
   --draft <true|false>
 ```
 
-### Step W5: 提示关联 MOC
+### Step W5: 关联建议
 
-检查 `D:/obsidian/03-Knowledge/MOCs/` 下是否有相关 MOC，如有，告知用户。
+脚本会自动输出 `[Link suggestions]`，展示给用户，并询问是否自动添加链接。
+如果用户确认，用 Read + Edit 工具将 `[[新笔记名]]` 添加到建议的区块末尾。
 
 ---
 
@@ -238,6 +243,94 @@ python ~/.claude/scripts/obsidian_writer.py --type init
 ```
 
 直接展示脚本输出，无需额外处理。
+
+---
+
+## MODE: query — 知识库问答
+
+**Goal:** 搜索 vault 中的已有笔记回答用户问题，每个论点附引用来源，可选归档答案。
+
+### Step Q1: 搜索相关笔记
+
+用 Grep 工具在以下位置搜索用户问题中的关键词：
+- `D:/obsidian/03-Knowledge/**/*.md`
+- `D:/obsidian/02-Projects/**/*.md`
+
+搜索标题和正文，列出匹配文件。
+
+### Step Q2: 读取笔记内容
+
+用 Read 工具读取匹配笔记的相关段落（优先读 `核心观点`、`当前结论`、`一句话定义` 区块）。
+
+### Step Q3: 综合回答
+
+基于找到的内容回答，每个论点标注来源：
+
+```
+Transformer 的核心是自注意力机制 — [[Concept - Self-Attention]]
+在实际部署中 KV Cache 是主要瓶颈 — [[Literature - LLM Inference Optimization]]
+```
+
+如果 vault 中没有相关内容，明确告知："你的笔记里暂无关于 X 的内容。"
+
+### Step Q4: 可选归档
+
+如果用户说"存下来"、"保存这个回答"：
+
+```bash
+python ~/.claude/scripts/obsidian_writer.py \
+  --type topic \
+  --title "<问题主题>" \
+  --fields '{"主题说明": "...", "当前结论": "...", "重要资料": "[[...]]"}' \
+  --draft false
+```
+
+---
+
+## MODE: lint — 知识库健康检查
+
+**Goal:** 扫描 vault，报告质量问题，可选自动修复简单问题。
+
+### 检查项
+
+| 类型 | 说明 | 处理 |
+|------|------|------|
+| 断链 | `[[wikilink]]` 指向不存在的笔记 | 报告 |
+| 孤立笔记 | 03-Knowledge / 02-Projects 下未被任何笔记引用的文件 | 报告 |
+| Inbox 积压 | 00-Inbox 中超过 7 天的笔记 | 报告 |
+| 空壳笔记 | `_待补充_` 占比超过 50% 的笔记 | 报告 |
+| 陈旧笔记 | status=active 且 90 天未更新 | 报告 |
+| 缺失 frontmatter 字段 | 缺少 status/created/updated/reviewed | 自动修复（需 `--auto-fix`） |
+
+### 调用
+
+```bash
+# 仅报告
+python ~/.claude/scripts/obsidian_writer.py --type lint
+
+# 报告 + 自动修复 frontmatter
+python ~/.claude/scripts/obsidian_writer.py --type lint --auto-fix
+```
+
+### 使用时机
+
+- 用户说"检查知识库"、"lint"、"有没有断链"、"孤立笔记" → 直接运行，展示输出
+- 用户说"帮我修复"、"自动修复"、"fix" → 加 `--auto-fix` 运行
+
+---
+
+## MODE: index — 知识库索引维护
+
+**Goal:** 在 vault 根目录生成/重建 `_index.md`，作为全局导航页。
+
+> 写入新笔记（write/capture）时会自动增量更新索引，无需手动触发。
+> 仅在索引混乱或首次使用时需要重建。
+
+```bash
+python ~/.claude/scripts/obsidian_writer.py --type index
+```
+
+直接展示脚本输出。索引文件位于 vault 根目录的 `_index.md`。
 
 ---
 
