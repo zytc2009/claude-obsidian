@@ -91,8 +91,8 @@ def make_filename(prefix: str, title: str, target_dir: Path) -> str:
 # ---------------------------------------------------------------------------
 
 def _f(fields: dict, key: str) -> str:
-    """Return field value or placeholder if empty."""
-    return fields.get(key, "").strip() or "_待补充_"
+    """Return field value or empty string if missing."""
+    return fields.get(key, "").strip()
 
 
 def _frontmatter(note_type: str, fields: dict, is_draft: bool = False) -> str:
@@ -254,19 +254,16 @@ def render_moc(title: str, fields: dict, is_draft: bool = False) -> str:
 # 主题地图
 
 # 概念
-{links if links else "_待补充_"}
+{links if links else ""}
 
 # 资料
-_待补充_
 
 # 项目
-_待补充_
 
 # 常见问题
-_待补充_
 
 # 输出内容
-_待补充_
+
 """
 
 
@@ -828,11 +825,12 @@ def lint_vault(vault: Path, auto_fix: bool = False) -> None:
                     pass
 
         # --- Skeleton notes ---
-        placeholder_count = text.count("_待补充_")
-        section_count = len(re.findall(r"^#+\s", text, re.MULTILINE))
-        if section_count > 0 and placeholder_count / section_count > _SKELETON_RATIO:
+        sections = re.split(r"^#+\s.*$", text, flags=re.MULTILINE)
+        section_count = len(sections) - 1  # exclude preamble
+        empty_count = sum(1 for s in sections[1:] if not s.strip())
+        if section_count > 0 and empty_count / section_count > _SKELETON_RATIO:
             skeletons.append(
-                f"  {rel} ({placeholder_count}/{section_count} sections empty)"
+                f"  {rel} ({empty_count}/{section_count} sections empty)"
             )
 
         # --- Stale notes (active, not updated in 90+ days) ---

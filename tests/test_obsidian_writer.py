@@ -111,9 +111,9 @@ class TestRenderLiterature:
         result = render_literature("Test", fields)
         assert "transformer architecture" in result
 
-    def test_fills_placeholder_for_empty_field(self):
+    def test_empty_field_is_blank(self):
         result = render_literature("Test", {})
-        assert "_待补充_" in result
+        assert "_待补充_" not in result
 
     def test_frontmatter_type_is_literature(self):
         result = render_literature("Test", {})
@@ -148,9 +148,9 @@ class TestRenderConcept:
         result = render_concept("Transformer", fields)
         assert "基于自注意力机制的序列转换架构" in result
 
-    def test_fills_placeholder_for_empty_field(self):
+    def test_empty_field_is_blank(self):
         result = render_concept("Test", {})
-        assert "_待补充_" in result
+        assert "_待补充_" not in result
 
     def test_frontmatter_type_is_concept(self):
         result = render_concept("Test", {})
@@ -181,9 +181,9 @@ class TestRenderTopic:
         result = render_topic("RAG", fields)
         assert "What retrieval settings affect answer quality?" in result
 
-    def test_fills_placeholder_for_empty_field(self):
+    def test_empty_field_is_blank(self):
         result = render_topic("Test", {})
-        assert "_待补充_" in result
+        assert "_待补充_" not in result
 
     def test_frontmatter_type_is_topic(self):
         result = render_topic("Test", {})
@@ -200,9 +200,9 @@ class TestRenderProject:
         result = render_project("Test", fields)
         assert "Build local RAG demo" in result
 
-    def test_fills_placeholder_for_empty_field(self):
+    def test_empty_field_is_blank(self):
         result = render_project("Test", {})
-        assert "_待补充_" in result
+        assert "_待补充_" not in result
 
     def test_frontmatter_type_is_project(self):
         result = render_project("Test", {})
@@ -427,7 +427,7 @@ class TestLintVault:
             vault = self._make_vault(tmp)
             self._write(
                 vault / "03-Knowledge/Concepts/Concept - Referenced.md",
-                "---\ntype: concept\nstatus: active\ncreated: 2026-04-01\nupdated: 2026-04-01\n---\n# content\n"
+                "---\ntype: concept\nstatus: active\ncreated: 2026-04-01\nupdated: 2026-04-01\n---\n# content\nsome text here\n"
             )
             self._write(
                 vault / "03-Knowledge/MOCs/MOC - AI.md",
@@ -470,7 +470,7 @@ class TestLintVault:
             self._write(
                 vault / "03-Knowledge/Topics/Topic - Skeleton.md",
                 "---\ntype: topic\nstatus: active\ncreated: 2026-04-01\nupdated: 2026-04-01\n---\n"
-                "# section1\n_待补充_\n# section2\n_待补充_\n# section3\n_待补充_\n# section4\nsome content\n"
+                "# section1\n\n# section2\n\n# section3\n\n# section4\nsome content\n"
             )
             lint_vault(vault)
             out = capsys.readouterr().out
