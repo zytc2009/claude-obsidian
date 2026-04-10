@@ -23,6 +23,7 @@ from skills.obsidian.obsidian_writer import (
     render_project,
     render_topic,
     suggest_links,
+    suggest_new_topic,
     write_note,
 )
 
@@ -530,6 +531,7 @@ class TestSuggestLinks:
             suggestions = suggest_links(vault, new_note)
             paths = [str(s[0]) for s in suggestions]
             assert any("MOC - Transformer" in p for p in paths)
+            assert any("strength=medium" in s[1] and "title=Transformer" in s[1] for s in suggestions)
 
     def test_no_suggestion_when_already_linked(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -562,6 +564,8 @@ class TestSuggestLinks:
             suggestions = suggest_links(vault, new_note)
             paths = [str(s[0]) for s in suggestions]
             assert any("Topic - Attention" in p for p in paths)
+            assert "Topic - Attention Mechanism" in paths[0]
+            assert "strength=high" in suggestions[0][1]
 
     def test_topic_can_match_by_body_content(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -576,6 +580,21 @@ class TestSuggestLinks:
             suggestions = suggest_links(vault, new_note)
             paths = [str(s[0]) for s in suggestions]
             assert any("Topic - Media Transport" in p for p in paths)
+            assert any("body=Bitrate" in s[1] or "body=Control" in s[1] for s in suggestions)
+
+
+class TestSuggestNewTopic:
+    def test_suggests_new_topic_when_no_topic_match_exists(self):
+        new_note = Path("03-Knowledge/Literature/Literature - Bitrate Control Survey.md")
+        suggestions = [(Path("03-Knowledge/MOCs/MOC - Streaming.md"), "# 资料; strength=medium; title=Streaming")]
+        hint = suggest_new_topic(new_note, suggestions)
+        assert "Topic - Bitrate Control" in hint
+
+    def test_skips_new_topic_hint_when_topic_match_exists(self):
+        new_note = Path("03-Knowledge/Literature/Literature - Attention Survey.md")
+        suggestions = [(Path("03-Knowledge/Topics/Topic - Attention Mechanism.md"), "# 重要资料; strength=high; title=Attention")]
+        hint = suggest_new_topic(new_note, suggestions)
+        assert hint == ""
 
 
 class TestRebuildIndex:

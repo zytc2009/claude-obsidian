@@ -507,15 +507,46 @@ def suggest_links(vault: Path, new_note_path: Path) -> list:
 
             title_text = md_file.stem.lower()
             body_text = text.lower()
-            title_matches = sum(1 for w in words if w.lower() in title_text)
-            body_matches = sum(1 for w in words if w.lower() in body_text)
+            title_words = [w for w in words if w.lower() in title_text]
+            body_words = [w for w in words if w.lower() in body_text]
+            title_matches = len(title_words)
+            body_matches = len(body_words)
             score = base_score + title_matches * 2 + body_matches
             if score <= base_score:
                 continue
-            candidates.append((score, md_file.relative_to(vault), section))
+            strength = "high" if base_score == 2 else "medium"
+            reason_parts = [f"strength={strength}"]
+            if title_words:
+                reason_parts.append(f"title={', '.join(title_words[:3])}")
+            if body_words:
+                reason_parts.append(f"body={', '.join(body_words[:3])}")
+            reason = "; ".join(reason_parts)
+            candidates.append((score, md_file.relative_to(vault), f"{section}; {reason}"))
 
     candidates.sort(key=lambda item: (-item[0], str(item[1])))
     return [(rel, section) for _, rel, section in candidates[:max_suggestions]]
+
+
+def suggest_new_topic(new_note_path: Path, suggestions: list) -> str:
+    """Suggest a new topic name when no existing topic is a strong fit."""
+    has_topic_match = any("Topics" in Path(rel).parts for rel, _ in suggestions)
+    if has_topic_match:
+        return ""
+
+    stem = new_note_path.stem
+    stop = {
+        "literature", "concept", "topic", "project", "moc", "survey",
+        "notes", "note", "draft", "article", "paper", "blog",
+    }
+    words = [
+        w for w in re.split(r"[\s\-_]+", stem)
+        if len(w) >= 4 and w.lower() not in stop
+    ]
+    if not words:
+        return ""
+
+    phrase = " ".join(words[:3])
+    return f"Consider creating: Topic - {phrase}"
 
 
 # ---------------------------------------------------------------------------
@@ -938,6 +969,11 @@ def main(argv=None):
         print("\n[Link suggestions]")
         for rel, section in suggestions:
             print(f"  → {rel}  ({section}  ← add [[{filepath.stem}]])")
+
+    new_topic_hint = suggest_new_topic(filepath, suggestions)
+    if new_topic_hint:
+        print("\n[Topic suggestion]")
+        print(f"  {new_topic_hint}")
 
 
 if __name__ == "__main__":
