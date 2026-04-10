@@ -230,7 +230,9 @@ python ~/.claude/scripts/obsidian_writer.py \
 ### Step W5: 关联建议
 
 脚本会自动输出 `[Link suggestions]`，优先展示可能归属的 `topic`，其次才是 `MOC`。
+建议中可能带有 `strength=...`、`title=...`、`body=...`，用于说明推荐原因。
 这些建议的主要作用是帮助用户发现主题归属，而不是盲目自动加链接。
+如果没有强 `topic` 匹配，脚本还可能输出 `[Topic suggestion]`，提示用户考虑新建一个主题页。
 如果用户确认，用 Read + Edit 工具将 `[[新笔记名]]` 添加到建议的区块末尾。
 
 ---

@@ -80,6 +80,16 @@ Search the vault for related notes, merge them into a `topic` or `MOC`, and surf
 /obsidian organize RAG
 ```
 
+### Topic discovery
+
+After writing a note, the script can surface:
+
+- `[Link suggestions]`: existing `topic` matches first, then `MOC` matches
+- explainable reasons such as `strength=high`, `title=...`, or `body=...`
+- `[Topic suggestion]`: a conservative hint to create a new `topic` when no strong existing topic match is found
+
+This is meant to help you discover where a note belongs, not to aggressively auto-link everything.
+
 ### `query` — Query your knowledge base
 
 Search existing notes and answer questions with citations. Optionally archive the answer as a new topic note.
