@@ -43,12 +43,12 @@ NOTE_CONFIG = {
     "topic": {
         "prefix": "Topic",
         "target": "03-Knowledge/Topics",
-        "required": ["主题说明", "核心概念"],
+        "required": ["主题说明", "当前结论"],
     },
     "project": {
         "prefix": "Project",
         "target": "02-Projects",
-        "required": ["项目目标", "完成标准", "任务拆分"],
+        "required": ["项目描述", "排查过程", "解决方案"],
     },
     "moc": {
         "prefix": "MOC",
@@ -201,23 +201,20 @@ def render_topic(title: str, fields: dict, is_draft: bool = False) -> str:
 # 主题说明
 {_f(fields, "主题说明")}
 
-# 我想回答的问题
-{_f(fields, "问题列表")}
-
-# 核心概念
-{_f(fields, "核心概念")}
+# 核心问题
+{_f(fields, "核心问题")}
 
 # 重要资料
 {_f(fields, "重要资料")}
+
+# 相关项目
+{_f(fields, "相关项目")}
 
 # 当前结论
 {_f(fields, "当前结论")}
 
 # 未解决问题
 {_f(fields, "未解决问题")}
-
-# 下一步学习路线
-{_f(fields, "下一步路线")}
 """
 
 
@@ -227,29 +224,23 @@ def render_project(title: str, fields: dict, is_draft: bool = False) -> str:
 
 # {title}
 
-# 项目目标
-{_f(fields, "项目目标")}
+# 项目描述
+{_f(fields, "项目描述")}
 
-# 完成标准
-{_f(fields, "完成标准")}
+# 原因分析
+{_f(fields, "原因分析")}
 
-# 当前状态
-{fields.get("当前状态", "进行中")}
+# 排查过程
+{_f(fields, "排查过程")}
 
-# 任务拆分
-{_f(fields, "任务拆分")}
+# 解决方案
+{_f(fields, "解决方案")}
 
-# 相关资料
-{_f(fields, "相关资料")}
+# 结果验证
+{_f(fields, "结果验证")}
 
-# 风险与阻塞
-{_f(fields, "风险与阻塞")}
-
-# 实验记录
-{_f(fields, "实验记录")}
-
-# 产出
-{_f(fields, "产出")}
+# 风险与遗留问题
+{_f(fields, "风险与遗留问题")}
 """
 
 
@@ -494,7 +485,13 @@ def suggest_links(vault: Path, new_note_path: Path) -> list:
         return []
 
     candidates = []
-    for search_dir in ["03-Knowledge/MOCs", "03-Knowledge/Topics"]:
+    search_plan = [
+        ("03-Knowledge/Topics", 2, "# 相关项目" if new_note_path.stem.startswith("Project - ") else "# 重要资料"),
+        ("03-Knowledge/MOCs", 1, "# 资料"),
+    ]
+    max_suggestions = 3
+
+    for search_dir, base_score, section in search_plan:
         target_dir = vault / search_dir
         if not target_dir.exists():
             continue
@@ -505,17 +502,20 @@ def suggest_links(vault: Path, new_note_path: Path) -> list:
                 text = md_file.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
-            # Already links to the new note?
             if new_note_path.stem in text:
                 continue
-            # Any keyword match?
-            lower_text = text.lower()
-            if any(w.lower() in lower_text for w in words):
-                fm_type = _parse_frontmatter(text).get("type", "")
-                section = "# 资料" if fm_type == "moc" else "# 重要资料"
-                candidates.append((md_file.relative_to(vault), section))
 
-    return candidates
+            title_text = md_file.stem.lower()
+            body_text = text.lower()
+            title_matches = sum(1 for w in words if w.lower() in title_text)
+            body_matches = sum(1 for w in words if w.lower() in body_text)
+            score = base_score + title_matches * 2 + body_matches
+            if score <= base_score:
+                continue
+            candidates.append((score, md_file.relative_to(vault), section))
+
+    candidates.sort(key=lambda item: (-item[0], str(item[1])))
+    return [(rel, section) for _, rel, section in candidates[:max_suggestions]]
 
 
 # ---------------------------------------------------------------------------

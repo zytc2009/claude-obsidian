@@ -176,11 +176,15 @@ Key fields: `one-line definition`, `core mechanism`, `advantages`, `limitations`
 
 ### Topic — Topic summaries
 
-A synthesis page aggregating concepts, literature, and open questions around a theme.
+A synthesis page that organizes your current understanding of a theme across literature and project notes.
 
-### Project — Project pages
+Key fields: `topic description`, `core question`, `current conclusions`, `key references`, `related projects`, `open questions`
 
-Project tracking with goals, tasks, risk assessment, and an embedded experiment log section.
+### Project — Problem and solution records
+
+A lightweight page for practical work notes: what happened, why it happened, how you investigated it, and how you solved it.
+
+Key fields: `project description`, `root cause analysis`, `investigation process`, `solution`, `validation`, `risks and open issues`
 
 ## Draft routing
 
@@ -195,8 +199,8 @@ Required fields per type:
 |------|----------------|
 | `literature` | core ideas, method details |
 | `concept` | one-line definition, core mechanism |
-| `topic` | topic description, core concepts |
-| `project` | goal, completion criteria, task breakdown |
+| `topic` | topic description, current conclusions |
+| `project` | project description, investigation process, solution |
 
 ## Installation
 

@@ -173,6 +173,11 @@ class TestRenderTopic:
         result = render_topic("RAG", fields)
         assert "Retrieval Augmented Generation overview" in result
 
+    def test_fills_core_question_field(self):
+        fields = {"核心问题": "What retrieval settings affect answer quality?"}
+        result = render_topic("RAG", fields)
+        assert "What retrieval settings affect answer quality?" in result
+
     def test_fills_placeholder_for_empty_field(self):
         result = render_topic("Test", {})
         assert "_待补充_" in result
@@ -188,7 +193,7 @@ class TestRenderProject:
         assert "本地知识库搭建" in result
 
     def test_fills_provided_field(self):
-        fields = {"项目目标": "Build local RAG demo"}
+        fields = {"项目描述": "Build local RAG demo"}
         result = render_project("Test", fields)
         assert "Build local RAG demo" in result
 
@@ -200,9 +205,9 @@ class TestRenderProject:
         result = render_project("Test", {})
         assert "type: project" in result
 
-    def test_includes_experiment_section(self):
+    def test_includes_solution_section(self):
         result = render_project("Test", {})
-        assert "实验记录" in result
+        assert "解决方案" in result
 
 
 class TestAppendFleeting:
@@ -308,7 +313,7 @@ class TestWriteNote:
         with tempfile.TemporaryDirectory() as tmp:
             vault = Path(tmp)
             path = write_note(vault=vault, note_type="topic",
-                              title="RAG", fields={"主题说明": "x", "核心概念": "y"},
+                              title="RAG", fields={"主题说明": "x", "当前结论": "y"},
                               is_draft=False)
             assert "status: active" in path.read_text(encoding="utf-8")
 
@@ -558,6 +563,20 @@ class TestSuggestLinks:
             paths = [str(s[0]) for s in suggestions]
             assert any("Topic - Attention" in p for p in paths)
 
+    def test_topic_can_match_by_body_content(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self._make_vault(tmp)
+            topic = vault / "03-Knowledge/Topics/Topic - Media Transport.md"
+            self._write(
+                topic,
+                "---\ntype: topic\n---\n# 主题说明\nWebRTC bitrate adaptation and packet loss handling\n",
+            )
+            new_note = vault / "03-Knowledge/Literature/Literature - Bitrate Control Survey.md"
+            self._write(new_note, "---\ntype: literature\n---\ncontent\n")
+            suggestions = suggest_links(vault, new_note)
+            paths = [str(s[0]) for s in suggestions]
+            assert any("Topic - Media Transport" in p for p in paths)
+
 
 class TestRebuildIndex:
     def _make_vault(self, tmp: str) -> Path:
@@ -662,7 +681,7 @@ class TestCLI:
                     "skills/obsidian/obsidian_writer.py",
                     "--type", "topic",
                     "--title", "RAG",
-                    "--fields", '{"主题说明": "overview", "核心概念": "retrieval"}',
+                    "--fields", '{"主题说明": "overview", "当前结论": "retrieval improves grounding"}',
                     "--draft", "false",
                     "--vault", tmp,
                 ],
