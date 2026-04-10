@@ -466,6 +466,29 @@ def init_vault(vault: Path) -> None:
 # Link suggestion
 # ---------------------------------------------------------------------------
 
+def _suggestion_keywords_from_stem(stem: str) -> list:
+    """Extract meaningful keywords from a note stem for link suggestion."""
+    normalized_stem = re.sub(r"\s\d{4}-\d{2}-\d{2}$", "", stem)
+    stop_words = {
+        "with", "from", "that", "this", "into", "over", "under",
+        "about", "have", "been", "were", "will", "does", "their",
+    }
+    type_prefixes = ("Literature", "Concept", "Topic", "Project", "MOC")
+
+    keywords = []
+    for word in re.split(r"[\s\-_]+", normalized_stem):
+        if not word:
+            continue
+        if word.startswith(type_prefixes):
+            continue
+        if re.fullmatch(r"\d{4}(?:\d{2}){0,2}", word):
+            continue
+        if len(word) >= 4 or (len(word) == 3 and word.isupper()):
+            if word.lower() not in stop_words:
+                keywords.append(word)
+    return keywords
+
+
 def suggest_links(vault: Path, new_note_path: Path) -> list:
     """Return MOC/Topic files that likely should link to the new note.
 
@@ -475,12 +498,7 @@ def suggest_links(vault: Path, new_note_path: Path) -> list:
     """
     stem = new_note_path.stem  # e.g. "Literature - Attention Is All You Need"
     # Extract meaningful words (≥4 chars, not common stop words)
-    _STOP = {"with", "from", "that", "this", "into", "over", "under",
-              "about", "have", "been", "were", "will", "does", "their"}
-    words = [
-        w for w in re.split(r"[\s\-_]+", stem)
-        if len(w) >= 4 and w.lower() not in _STOP and not w.startswith(("Literature", "Concept", "Topic", "Project", "MOC"))
-    ]
+    words = _suggestion_keywords_from_stem(stem)
     if not words:
         return []
 

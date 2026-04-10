@@ -12,6 +12,7 @@ from skills.obsidian.obsidian_writer import (
     _append_to_index,
     _extract_wikilinks,
     _parse_frontmatter,
+    _suggestion_keywords_from_stem,
     append_fleeting,
     get_target_path,
     is_draft_by_content,
@@ -583,6 +584,17 @@ class TestSuggestLinks:
             assert any("Topic - Media Transport" in p for p in paths)
             assert any("body=Bitrate" in s[1] or "body=Control" in s[1] for s in suggestions)
 
+    def test_ignores_collision_date_suffix_in_keywords(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self._make_vault(tmp)
+            topic = vault / "03-Knowledge/Topics/Topic - RAG.md"
+            self._write(topic, "---\ntype: topic\n---\n# 閲嶈璧勬枡\nRAG system design\n")
+            new_note = vault / "03-Knowledge/Literature/Literature - RAG 2026-04-10.md"
+            self._write(new_note, "---\ntype: literature\n---\ncontent\n")
+            suggestions = suggest_links(vault, new_note)
+            assert any("Topic - RAG" in str(path) for path, _ in suggestions)
+            assert all("2026" not in reason for _, reason in suggestions)
+
 
 class TestSuggestNewTopic:
     def test_suggests_new_topic_when_no_topic_match_exists(self):
@@ -612,6 +624,16 @@ class TestTopicCandidateFromStem:
     def test_keeps_meaningful_multiword_phrase(self):
         candidate = _topic_candidate_from_stem("Project - WebRTC Packet Loss Debugging Notes")
         assert candidate == "WebRTC Packet Loss Debugging"
+
+
+class TestSuggestionKeywordsFromStem:
+    def test_allows_three_letter_uppercase_acronyms(self):
+        keywords = _suggestion_keywords_from_stem("Literature - RAG")
+        assert keywords == ["RAG"]
+
+    def test_strips_collision_date_suffix(self):
+        keywords = _suggestion_keywords_from_stem("Topic - RAG 2026-04-10")
+        assert keywords == ["RAG"]
 
 
 class TestRebuildIndex:
