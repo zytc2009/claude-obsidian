@@ -598,6 +598,12 @@ class TestSuggestNewTopic:
         assert hint == ""
 
 
+    def test_skips_new_topic_hint_for_new_topic_note_itself(self):
+        new_note = Path("03-Knowledge/Topics/Topic - RAG.md")
+        hint = suggest_new_topic(new_note, [])
+        assert hint == ""
+
+
 class TestTopicCandidateFromStem:
     def test_strips_note_type_prefix_and_generic_suffix(self):
         candidate = _topic_candidate_from_stem("Literature - Bitrate Control Survey")
@@ -769,6 +775,26 @@ class TestCLI:
             )
             assert result.returncode == 0
             assert "[Link suggestions]" in result.stdout
+            assert "[Topic suggestion]" not in result.stdout
+
+    def test_write_mode_does_not_suggest_topic_for_topic_note_itself(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "skills/obsidian/obsidian_writer.py",
+                    "--type", "topic",
+                    "--title", "RAG",
+                    "--fields", '{"涓婚璇存槑": "overview", "褰撳墠缁撹": "retrieval improves grounding"}',
+                    "--draft", "false",
+                    "--vault", tmp,
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                cwd="D:/AI/claude_code/claude-obsidian",
+            )
+            assert result.returncode == 0
             assert "[Topic suggestion]" not in result.stdout
 
     def test_fleeting_dry_run(self):

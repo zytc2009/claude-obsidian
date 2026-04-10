@@ -529,6 +529,9 @@ def suggest_links(vault: Path, new_note_path: Path) -> list:
 
 def suggest_new_topic(new_note_path: Path, suggestions: list) -> str:
     """Suggest a new topic name when no existing topic is a strong fit."""
+    if "Topics" in new_note_path.parts or new_note_path.stem.startswith("Topic - "):
+        return ""
+
     has_topic_match = any("Topics" in Path(rel).parts for rel, _ in suggestions)
     if has_topic_match:
         return ""
