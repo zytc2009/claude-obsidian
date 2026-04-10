@@ -533,20 +533,30 @@ def suggest_new_topic(new_note_path: Path, suggestions: list) -> str:
     if has_topic_match:
         return ""
 
-    stem = new_note_path.stem
-    stop = {
-        "literature", "concept", "topic", "project", "moc", "survey",
-        "notes", "note", "draft", "article", "paper", "blog",
-    }
-    words = [
-        w for w in re.split(r"[\s\-_]+", stem)
-        if len(w) >= 4 and w.lower() not in stop
-    ]
-    if not words:
+    phrase = _topic_candidate_from_stem(new_note_path.stem)
+    if not phrase:
         return ""
 
-    phrase = " ".join(words[:3])
     return f"Consider creating: Topic - {phrase}"
+
+
+def _topic_candidate_from_stem(stem: str) -> str:
+    """Extract a reasonable topic candidate from a note stem."""
+    prefix_stop = {"literature", "concept", "topic", "project", "moc"}
+    suffix_stop = {
+        "survey", "surveys", "notes", "note", "draft", "article", "paper",
+        "blog", "overview", "guide", "tutorial", "summary",
+    }
+    words = [w for w in re.split(r"[\s\-_]+", stem) if w]
+    while words and words[0].lower() in prefix_stop:
+        words.pop(0)
+    while words and words[-1].lower() in suffix_stop:
+        words.pop()
+
+    filtered = [w for w in words if len(w) >= 3]
+    if not filtered:
+        return ""
+    return " ".join(filtered[:4])
 
 
 # ---------------------------------------------------------------------------

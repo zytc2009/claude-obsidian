@@ -22,6 +22,7 @@ from skills.obsidian.obsidian_writer import (
     render_literature,
     render_project,
     render_topic,
+    _topic_candidate_from_stem,
     suggest_links,
     suggest_new_topic,
     write_note,
@@ -597,6 +598,16 @@ class TestSuggestNewTopic:
         assert hint == ""
 
 
+class TestTopicCandidateFromStem:
+    def test_strips_note_type_prefix_and_generic_suffix(self):
+        candidate = _topic_candidate_from_stem("Literature - Bitrate Control Survey")
+        assert candidate == "Bitrate Control"
+
+    def test_keeps_meaningful_multiword_phrase(self):
+        candidate = _topic_candidate_from_stem("Project - WebRTC Packet Loss Debugging Notes")
+        assert candidate == "WebRTC Packet Loss Debugging"
+
+
 class TestRebuildIndex:
     def _make_vault(self, tmp: str) -> Path:
         vault = Path(tmp)
@@ -711,6 +722,54 @@ class TestCLI:
             )
             assert result.returncode == 0
             assert "[OK] Written:" in result.stdout
+
+    def test_write_mode_prints_topic_suggestion_when_no_topic_match_exists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "skills/obsidian/obsidian_writer.py",
+                    "--type", "literature",
+                    "--title", "Bitrate Control Survey",
+                    "--fields", '{"核心观点": "x", "方法要点": "y"}',
+                    "--draft", "false",
+                    "--vault", tmp,
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                cwd="D:/AI/claude_code/claude-obsidian",
+            )
+            assert result.returncode == 0
+            assert "[Topic suggestion]" in result.stdout
+            assert "Topic - Bitrate Control" in result.stdout
+
+    def test_write_mode_skips_topic_suggestion_when_topic_match_exists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            topic_dir = Path(tmp) / "03-Knowledge/Topics"
+            topic_dir.mkdir(parents=True, exist_ok=True)
+            (topic_dir / "Topic - Attention Mechanism.md").write_text(
+                "---\ntype: topic\n---\n# 重要资料\nAttention research\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "skills/obsidian/obsidian_writer.py",
+                    "--type", "literature",
+                    "--title", "Attention Survey",
+                    "--fields", '{"核心观点": "x", "方法要点": "y"}',
+                    "--draft", "false",
+                    "--vault", tmp,
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                cwd="D:/AI/claude_code/claude-obsidian",
+            )
+            assert result.returncode == 0
+            assert "[Link suggestions]" in result.stdout
+            assert "[Topic suggestion]" not in result.stdout
 
     def test_fleeting_dry_run(self):
         with tempfile.TemporaryDirectory() as tmp:
