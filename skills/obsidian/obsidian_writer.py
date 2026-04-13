@@ -600,8 +600,9 @@ def _classify_ingest_action(
     """Return (action, existing_path_or_None, planned_write_path).
 
     action values:
-      'create' — no collision, net-new note
-      'merge'  — base filename exists; a dated copy will be written instead
+      'create'            — no collision, net-new note
+      'create (dated copy)' — base filename exists; existing note is unchanged,
+                              a new dated copy will be written instead
     """
     target_dir = get_target_path(vault, note_type, is_draft)
     prefix = NOTE_CONFIG[note_type]["prefix"]
@@ -612,7 +613,7 @@ def _classify_ingest_action(
 
     today = date.today().strftime("%Y-%m-%d")
     dated_path = target_dir / f"{prefix} - {title} {today}.md"
-    return "merge", base_path, dated_path
+    return "create (dated copy)", base_path, dated_path
 
 
 def _section_diff_summary(existing_path: Path, new_content: str) -> str:
@@ -1619,6 +1620,7 @@ def main(argv=None):
         if existing_path:
             print(f"Existing: {existing_path.relative_to(vault)}")
             print(f"Diff    : {_section_diff_summary(existing_path, content)}")
+            print(f"Note    : existing note unchanged — use --type merge-update to update in place")
         print(SEP)
         print(content)
         print(SEP)
@@ -1627,9 +1629,9 @@ def main(argv=None):
             print("[Link suggestions]")
             for rel, section in suggestions:
                 print(f"  → {rel}  ({section}  ← add [[{planned_path.stem}]])")
-            new_topic_hint = suggest_new_topic(planned_path, suggestions)
-            if new_topic_hint:
-                print(f"\n[Topic suggestion]\n  {new_topic_hint}")
+        new_topic_hint = suggest_new_topic(planned_path, suggestions)
+        if new_topic_hint:
+            print(f"\n[Topic suggestion]\n  {new_topic_hint}")
         return
 
     filepath = write_note(

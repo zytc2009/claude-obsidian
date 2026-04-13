@@ -11,8 +11,10 @@ from skills.obsidian.obsidian_writer import (
     _INDEX_FILE,
     _LOG_FILE,
     _append_to_index,
+    _classify_ingest_action,
     _extract_wikilinks,
     _parse_frontmatter,
+    _section_diff_summary,
     _suggestion_keywords_from_stem,
     add_conflict_annotation,
     add_source_reference,
@@ -906,7 +908,7 @@ class TestRebuildIndex:
 
 
 class TestCLI:
-    def test_dry_run_prints_content_without_writing(self):
+    def test_dry_run_prints_ingest_preview_without_writing(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = subprocess.run(
                 [
@@ -925,8 +927,11 @@ class TestCLI:
                 cwd="D:/AI/claude_code/claude-obsidian",
             )
             assert result.returncode == 0
+            assert "[INGEST PREVIEW]" in result.stdout
+            assert "Action  : create" in result.stdout
             assert "RAG" in result.stdout
-            assert "[DRY RUN]" in result.stdout
+            # No file written
+            assert not list(Path(tmp).rglob("*.md"))
 
     def test_write_mode_outputs_confirmation(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1325,3 +1330,135 @@ class TestCLI:
                 cwd="D:/AI/claude_code/claude-obsidian",
             )
             assert result.returncode != 0
+
+
+class TestClassifyIngestAction:
+    def test_create_when_no_collision(self, tmp_path):
+        (tmp_path / "03-Knowledge/Topics").mkdir(parents=True)
+        action, existing, planned = _classify_ingest_action(
+            tmp_path, "topic", "RAG", is_draft=False
+        )
+        assert action == "create"
+        assert existing is None
+        assert planned.name == "Topic - RAG.md"
+
+    def test_dated_copy_when_base_exists(self, tmp_path):
+        lit_dir = tmp_path / "03-Knowledge/Topics"
+        lit_dir.mkdir(parents=True)
+        (lit_dir / "Topic - RAG.md").write_text("existing", encoding="utf-8")
+
+        action, existing, planned = _classify_ingest_action(
+            tmp_path, "topic", "RAG", is_draft=False
+        )
+        today = date.today().strftime("%Y-%m-%d")
+        assert action == "create (dated copy)"
+        assert existing is not None
+        assert existing.name == "Topic - RAG.md"
+        assert planned.name == f"Topic - RAG {today}.md"
+
+    def test_create_in_inbox_when_draft(self, tmp_path):
+        (tmp_path / "00-Inbox").mkdir(parents=True)
+        action, existing, planned = _classify_ingest_action(
+            tmp_path, "topic", "RAG", is_draft=True
+        )
+        assert action == "create"
+        assert existing is None
+        assert "00-Inbox" in str(planned)
+
+
+class TestSectionDiffSummary:
+    def _make_note(self, tmp_path, name, sections: dict) -> Path:
+        lines = ["---\ntype: test\n---\n"]
+        for title, body in sections.items():
+            lines.append(f"# {title}\n{body}\n")
+        path = tmp_path / name
+        path.write_text("".join(lines), encoding="utf-8")
+        return path
+
+    def test_empty_to_filled_section(self, tmp_path):
+        existing = self._make_note(tmp_path, "old.md", {"核心观点": "", "方法要点": ""})
+        new_content = "# 核心观点\n新内容很长很长很长\n# 方法要点\n"
+        summary = _section_diff_summary(existing, new_content)
+        assert "核心观点" in summary
+        assert "empty→" in summary
+
+    def test_changed_section(self, tmp_path):
+        existing = self._make_note(tmp_path, "old.md", {"核心观点": "旧内容abc"})
+        new_content = "# 核心观点\n新内容xyz更长一些\n"
+        summary = _section_diff_summary(existing, new_content)
+        assert "核心观点" in summary
+        assert "c→" in summary
+
+    def test_no_diff_when_identical(self, tmp_path):
+        existing = self._make_note(tmp_path, "old.md", {"核心观点": "内容相同"})
+        new_content = "# 核心观点\n内容相同\n"
+        summary = _section_diff_summary(existing, new_content)
+        assert summary == "no section differences"
+
+
+class TestIngestPreviewCLI:
+    """End-to-end tests for the --dry-run ingest preview output."""
+
+    def _run(self, tmp, extra_args=None):
+        cmd = [
+            sys.executable,
+            "skills/obsidian/obsidian_writer.py",
+            "--type", "literature",
+            "--title", "Test Paper",
+            "--fields", '{"核心观点": "key finding", "方法要点": "method detail"}',
+            "--draft", "false",
+            "--vault", tmp,
+            "--dry-run",
+        ]
+        if extra_args:
+            cmd.extend(extra_args)
+        return subprocess.run(
+            cmd,
+            capture_output=True, text=True, encoding="utf-8",
+            cwd="D:/AI/claude_code/claude-obsidian",
+        )
+
+    def test_create_action_shown_for_new_note(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self._run(tmp)
+            assert result.returncode == 0
+            assert "[INGEST PREVIEW]" in result.stdout
+            assert "Action  : create" in result.stdout
+            assert "Target  :" in result.stdout
+            # no file written
+            assert not list(Path(tmp).rglob("*.md"))
+
+    def test_dated_copy_action_shown_when_collision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lit_dir = Path(tmp) / "03-Knowledge/Literature"
+            lit_dir.mkdir(parents=True)
+            (lit_dir / "Literature - Test Paper.md").write_text(
+                "---\ntype: literature\n---\n# 核心观点\nold finding\n",
+                encoding="utf-8",
+            )
+            result = self._run(tmp)
+            assert result.returncode == 0
+            assert "Action  : create (dated copy)" in result.stdout
+            assert "Existing:" in result.stdout
+            assert "Diff    :" in result.stdout
+            assert "merge-update" in result.stdout  # hint line present
+
+    def test_topic_suggestion_shown_even_without_link_suggestions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            # Empty vault — no Topics/MOCs exist, so suggest_links returns []
+            result = self._run(tmp)
+            assert result.returncode == 0
+            # suggest_new_topic should still fire
+            assert "[Topic suggestion]" in result.stdout
+
+    def test_link_suggestions_shown_when_matching_topic_exists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            topic_dir = Path(tmp) / "03-Knowledge/Topics"
+            topic_dir.mkdir(parents=True)
+            (topic_dir / "Topic - Test Research.md").write_text(
+                "---\ntype: topic\n---\n# 重要资料\n\n# 当前结论\nTest is important\n",
+                encoding="utf-8",
+            )
+            result = self._run(tmp)
+            assert result.returncode == 0
+            assert "[Link suggestions]" in result.stdout
