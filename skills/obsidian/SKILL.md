@@ -93,6 +93,145 @@ python ~/.claude/scripts/obsidian_writer.py \
 
 ---
 
+## Capture Addendum: Merge-First Literature Workflow
+
+When `capture` is writing a `literature` note, do not assume every new source should create a new file.
+
+Use this decision order:
+
+1. Run:
+
+```bash
+python ~/.claude/scripts/obsidian_writer.py \
+  --type merge-candidates \
+  --title "<source title>"
+```
+
+2. If there are no candidates, create a new `literature` note as usual.
+3. If there are candidates, read the top 1-3 candidate notes and decide whether the new source:
+   - covers the same primary subject
+   - advances the same core thesis
+   - mostly adds evidence, benchmarks, boundary conditions, or nuance
+4. Only merge when all three are substantially true.
+5. If confidence is low, create a new note instead of merging.
+
+If you decide to merge, synthesize the updated sections first, then call:
+
+```bash
+python ~/.claude/scripts/obsidian_writer.py \
+  --type merge-update \
+  --target "<target note path relative to vault>" \
+  --fields '<JSON with updated sections>' \
+  --source-note "Literature - <new source title>" \
+  --source-ref "<author or publication>, <date>"
+```
+
+Minimum merge sections for `literature`:
+
+- `核心观点`
+- `方法要点`
+
+Optional merge sections when materially affected:
+
+- `原文主要内容`
+- `值得记住的细节`
+- `我不认同或存疑的地方`
+
+The script will:
+
+- replace or append the supplied sections
+- add the source under `# Sources`
+- add the new source note under `# Supporting notes`
+- append a `merge` entry to `_log.md`
+- refresh the target note's `updated` field
+
+After creating or merging a `literature` note, do a narrow topic cascade check:
+
+1. Run:
+
+```bash
+python ~/.claude/scripts/obsidian_writer.py \
+  --type cascade-candidates \
+  --target "<literature note path relative to vault>"
+```
+
+2. Read the top 1-3 topic candidates.
+3. Only cascade-update when the new source materially changes synthesis, such as:
+   - it changes the current conclusion
+   - it adds a key supporting reference
+   - it resolves an open question
+   - it introduces a real contradiction
+4. Do not cascade-update on keyword overlap alone.
+
+If a topic should be updated, call:
+
+```bash
+python ~/.claude/scripts/obsidian_writer.py \
+  --type cascade-update \
+  --target "<topic note path relative to vault>" \
+  --fields '<JSON with updated topic sections>' \
+  --source-note "Literature - <new source title>"
+```
+
+Allowed cascade sections are intentionally narrow:
+
+- `主题说明`
+- `核心问题`
+- `重要资料`
+- `相关项目`
+- `当前结论`
+- `未解决问题`
+
+If confidence is low, skip cascade-update entirely.
+
+Successful cascade updates also refresh the target topic note's `updated` field.
+
+When a new source concretely disagrees with an existing note, do not silently overwrite the old claim.
+
+Use `conflict-update` when all of these are true:
+
+- the disagreement is specific, not just a different emphasis
+- the new source and old note make materially incompatible claims
+- the conflict matters for future synthesis
+
+Call:
+
+```bash
+python ~/.claude/scripts/obsidian_writer.py \
+  --type conflict-update \
+  --target "<topic or concept note path relative to vault>" \
+  --fields '{"claim": "<new conflicting claim>"}' \
+  --source-note "Literature - <new source title>" \
+  --conflicts-with "<existing note or claim reference>"
+```
+
+Default status is `unresolved`. Only use a different status label when the user or the evidence clearly resolves the disagreement.
+
+Adding a new conflict annotation also refreshes the target note's `updated` field.
+
+When you already know the full deterministic plan, prefer a single `ingest-sync` call instead of chaining `merge-update`, `cascade-update`, and `conflict-update`.
+
+Use this shape:
+
+```bash
+python ~/.claude/scripts/obsidian_writer.py \
+  --type ingest-sync \
+  --target "<primary literature note path relative to vault>" \
+  --fields '{
+    "primary_fields": {...},
+    "source_note": "Literature - <new source title>",
+    "source_ref": "<author or publication>, <date>",
+    "cascade_updates": [
+      {"target": "<topic path>", "fields": {...}}
+    ],
+    "conflicts": [
+      {"target": "<topic or concept path>", "claim": "...", "conflicts_with": "..."}
+    ]
+  }'
+```
+
+This keeps all reasoning in the skill while reducing shell round-trips and ensuring the log captures the whole ingest as one operation.
+
 ## MODE: log — 对话转文档
 
 **Goal:** 把当前对话整理成一篇完整笔记，保留信息密度。

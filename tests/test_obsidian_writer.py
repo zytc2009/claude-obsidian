@@ -9,11 +9,18 @@ import pytest
 from skills.obsidian.obsidian_writer import (
     NOTE_CONFIG,
     _INDEX_FILE,
+    _LOG_FILE,
     _append_to_index,
     _extract_wikilinks,
     _parse_frontmatter,
     _suggestion_keywords_from_stem,
+    add_conflict_annotation,
+    add_source_reference,
+    add_supporting_note,
+    append_operation_log,
     append_fleeting,
+    find_cascade_candidates,
+    find_merge_candidates,
     get_target_path,
     is_draft_by_content,
     lint_vault,
@@ -23,9 +30,12 @@ from skills.obsidian.obsidian_writer import (
     render_literature,
     render_project,
     render_topic,
+    run_ingest_sync,
     _topic_candidate_from_stem,
     suggest_links,
     suggest_new_topic,
+    touch_updated,
+    update_note_sections,
     write_note,
 )
 
@@ -343,6 +353,20 @@ class TestWriteNote:
             assert "Concept - Transformer.md" == path.name
             assert "自注意力架构" in path.read_text(encoding="utf-8")
 
+    def test_non_draft_write_appends_operation_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            write_note(
+                vault=vault,
+                note_type="literature",
+                title="Logged Paper",
+                fields={"核心观点": "x", "方法要点": "y"},
+                is_draft=False,
+            )
+            text = (vault / _LOG_FILE).read_text(encoding="utf-8")
+            assert "write | Literature - Logged Paper" in text
+            assert "Action: created" in text
+
 
 class TestParseFrontmatter:
     def test_extracts_basic_fields(self):
@@ -356,6 +380,145 @@ class TestParseFrontmatter:
 
     def test_returns_empty_when_unclosed(self):
         assert _parse_frontmatter("---\ntype: foo\n") == {}
+
+
+class TestOperationLog:
+    def test_append_operation_log_creates_file_and_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            log_path = append_operation_log(
+                vault, "write", "Literature - Test", ["Action: created"]
+            )
+            assert log_path == vault / _LOG_FILE
+            text = log_path.read_text(encoding="utf-8")
+            assert "# Vault Operation Log" in text
+            assert "write | Literature - Test" in text
+            assert "Action: created" in text
+
+
+class TestSupportingSections:
+    def test_add_supporting_note_creates_section(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "Topic - RAG.md"
+            path.write_text("---\ntype: topic\n---\n# RAG\n", encoding="utf-8")
+            changed = add_supporting_note(path, "Literature - RAG Survey")
+            text = path.read_text(encoding="utf-8")
+            assert changed is True
+            assert "# Supporting notes" in text
+            assert "[[Literature - RAG Survey]]" in text
+
+    def test_add_source_reference_creates_section(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "Literature - RAG.md"
+            path.write_text("---\ntype: literature\n---\n# RAG\n", encoding="utf-8")
+            changed = add_source_reference(path, "Anthropic, 2026-04-13")
+            text = path.read_text(encoding="utf-8")
+            assert changed is True
+            assert "# Sources" in text
+            assert "Anthropic, 2026-04-13" in text
+
+    def test_add_conflict_annotation_creates_section(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "Topic - Attention.md"
+            path.write_text("---\ntype: topic\n---\n# Attention\n", encoding="utf-8")
+            changed = add_conflict_annotation(
+                path,
+                "Literature - New Benchmark",
+                "Small-sequence inference no longer favors FlashAttention.",
+                "[[Literature - FlashAttention Survey]]",
+            )
+            text = path.read_text(encoding="utf-8")
+            assert changed is True
+            assert "# Conflicts" in text
+            assert "Source: [[Literature - New Benchmark]]" in text
+            assert "Conflicts with: [[Literature - FlashAttention Survey]]" in text
+
+
+class TestUpdateNoteSections:
+    def test_replaces_existing_section_body(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "Literature - Test.md"
+            path.write_text(
+                "---\ntype: literature\n---\n# 核心观点\nold text\n\n# 方法要点\nold method\n",
+                encoding="utf-8",
+            )
+            changed = update_note_sections(path, {"核心观点": "new text"})
+            text = path.read_text(encoding="utf-8")
+            assert changed == ["核心观点"]
+            assert "# 核心观点\nnew text" in text
+            assert "old text" not in text
+
+    def test_appends_missing_section(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "Topic - Test.md"
+            path.write_text("---\ntype: topic\n---\n# Topic\n", encoding="utf-8")
+            changed = update_note_sections(path, {"当前结论": "updated conclusion"})
+            text = path.read_text(encoding="utf-8")
+            assert changed == ["当前结论"]
+            assert "# 当前结论" in text
+            assert "updated conclusion" in text
+
+
+class TestTouchUpdated:
+    def test_refreshes_updated_frontmatter_field(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "Topic - Test.md"
+            path.write_text(
+                "---\ntype: topic\nupdated: 2026-01-01\n---\n# Topic\n",
+                encoding="utf-8",
+            )
+            changed = touch_updated(path)
+            text = path.read_text(encoding="utf-8")
+            assert changed is True
+            assert f"updated: {date.today().strftime('%Y-%m-%d')}" in text
+
+
+class TestRunIngestSync:
+    def test_applies_primary_cascade_and_conflict_updates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            lit_dir = vault / "03-Knowledge/Literature"
+            topic_dir = vault / "03-Knowledge/Topics"
+            lit_dir.mkdir(parents=True, exist_ok=True)
+            topic_dir.mkdir(parents=True, exist_ok=True)
+            primary = lit_dir / "Literature - Attention Survey.md"
+            primary.write_text(
+                "---\ntype: literature\nupdated: 2026-01-01\n---\n# 核心观点\nold\n",
+                encoding="utf-8",
+            )
+            topic = topic_dir / "Topic - Attention Mechanism.md"
+            topic.write_text(
+                "---\ntype: topic\nupdated: 2026-01-01\n---\n# 当前结论\nold topic\n",
+                encoding="utf-8",
+            )
+            plan = {
+                "primary_fields": {"核心观点": "new primary synthesis"},
+                "source_note": "Literature - New Benchmark",
+                "source_ref": "OpenAI, 2026-04-13",
+                "cascade_updates": [
+                    {
+                        "target": "03-Knowledge/Topics/Topic - Attention Mechanism.md",
+                        "fields": {"当前结论": "new topic conclusion"},
+                    }
+                ],
+                "conflicts": [
+                    {
+                        "target": "03-Knowledge/Topics/Topic - Attention Mechanism.md",
+                        "claim": "New benchmark reverses the old conclusion.",
+                        "conflicts_with": "[[Literature - FlashAttention Survey]]",
+                    }
+                ],
+            }
+            summary = run_ingest_sync(vault, primary, plan)
+            assert summary["primary_updates"]
+            assert summary["cascade_updates"]
+            assert summary["conflicts"]
+            primary_text = primary.read_text(encoding="utf-8")
+            topic_text = topic.read_text(encoding="utf-8")
+            assert "new primary synthesis" in primary_text
+            assert "OpenAI, 2026-04-13" in primary_text
+            assert "new topic conclusion" in topic_text
+            assert "# Conflicts" in topic_text
 
 
 class TestExtractWikilinks:
@@ -596,6 +759,40 @@ class TestSuggestLinks:
             assert all("2026" not in reason for _, reason in suggestions)
 
 
+class TestFindMergeCandidates:
+    def test_returns_matching_literature_notes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            lit_dir = vault / "03-Knowledge/Literature"
+            lit_dir.mkdir(parents=True, exist_ok=True)
+            (lit_dir / "Literature - Attention Is All You Need.md").write_text(
+                "---\ntype: literature\n---\nattention transformer architecture\n",
+                encoding="utf-8",
+            )
+            (lit_dir / "Literature - Cooking Notes.md").write_text(
+                "---\ntype: literature\n---\nrecipes\n",
+                encoding="utf-8",
+            )
+            candidates = find_merge_candidates(vault, "Attention Survey")
+            assert any("Attention Is All You Need" in str(path) for path in candidates)
+
+
+class TestFindCascadeCandidates:
+    def test_returns_matching_topic_notes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            (vault / "03-Knowledge/Topics").mkdir(parents=True, exist_ok=True)
+            (vault / "03-Knowledge/Literature").mkdir(parents=True, exist_ok=True)
+            (vault / "03-Knowledge/Topics/Topic - Attention Mechanism.md").write_text(
+                "---\ntype: topic\n---\n# 重要资料\nAttention research\n",
+                encoding="utf-8",
+            )
+            source_note = vault / "03-Knowledge/Literature/Literature - Attention Survey.md"
+            source_note.write_text("---\ntype: literature\n---\ncontent\n", encoding="utf-8")
+            candidates = find_cascade_candidates(vault, source_note)
+            assert any("Topic - Attention Mechanism" in str(path) for path, _ in candidates)
+
+
 class TestSuggestNewTopic:
     def test_suggests_new_topic_when_no_topic_match_exists(self):
         new_note = Path("03-Knowledge/Literature/Literature - Bitrate Control Survey.md")
@@ -750,6 +947,279 @@ class TestCLI:
             )
             assert result.returncode == 0
             assert "[OK] Written:" in result.stdout
+            assert (Path(tmp) / _LOG_FILE).exists()
+
+    def test_merge_candidates_mode_lists_matches(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lit_dir = Path(tmp) / "03-Knowledge/Literature"
+            lit_dir.mkdir(parents=True, exist_ok=True)
+            (lit_dir / "Literature - Attention Is All You Need.md").write_text(
+                "---\ntype: literature\n---\nattention transformer architecture\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "skills/obsidian/obsidian_writer.py",
+                    "--type", "merge-candidates",
+                    "--title", "Attention Survey",
+                    "--vault", tmp,
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                cwd="D:/AI/claude_code/claude-obsidian",
+            )
+            assert result.returncode == 0
+            assert "[Merge candidates]" in result.stdout
+            assert "Attention Is All You Need" in result.stdout
+
+    def test_write_mode_supports_post_write_source_updates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "skills/obsidian/obsidian_writer.py",
+                    "--type", "topic",
+                    "--title", "RAG",
+                    "--fields", '{"主题说明": "overview", "当前结论": "retrieval improves grounding"}',
+                    "--draft", "false",
+                    "--vault", tmp,
+                    "--source-note", "Literature - RAG Survey",
+                    "--source-ref", "Anthropic, 2026-04-13",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                cwd="D:/AI/claude_code/claude-obsidian",
+            )
+            assert result.returncode == 0
+            note_text = (Path(tmp) / "03-Knowledge/Topics/Topic - RAG.md").read_text(encoding="utf-8")
+            assert "# Supporting notes" in note_text
+            assert "[[Literature - RAG Survey]]" in note_text
+            assert "# Sources" in note_text
+            assert "Anthropic, 2026-04-13" in note_text
+
+    def test_merge_update_mode_updates_note_and_logs_merge(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lit_dir = Path(tmp) / "03-Knowledge/Literature"
+            lit_dir.mkdir(parents=True, exist_ok=True)
+            target = lit_dir / "Literature - Attention Is All You Need.md"
+            target.write_text(
+                "---\ntype: literature\nupdated: 2026-01-01\n---\n# 核心观点\nold\n\n# 方法要点\nold method\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "skills/obsidian/obsidian_writer.py",
+                    "--type", "merge-update",
+                    "--target", "03-Knowledge/Literature/Literature - Attention Is All You Need.md",
+                    "--fields", '{"核心观点": "new synthesis", "方法要点": "new method"}',
+                    "--vault", tmp,
+                    "--source-note", "Literature - Attention Survey",
+                    "--source-ref", "OpenAI, 2026-04-13",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                cwd="D:/AI/claude_code/claude-obsidian",
+            )
+            assert result.returncode == 0
+            text = target.read_text(encoding="utf-8")
+            assert "new synthesis" in text
+            assert "new method" in text
+            assert "[[Literature - Attention Survey]]" in text
+            assert "OpenAI, 2026-04-13" in text
+            assert f"updated: {date.today().strftime('%Y-%m-%d')}" in text
+            log_text = (Path(tmp) / _LOG_FILE).read_text(encoding="utf-8")
+            assert "merge | Literature - Attention Is All You Need" in log_text
+
+    def test_cascade_candidates_mode_lists_matching_topics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "03-Knowledge/Topics").mkdir(parents=True, exist_ok=True)
+            (Path(tmp) / "03-Knowledge/Literature").mkdir(parents=True, exist_ok=True)
+            (Path(tmp) / "03-Knowledge/Topics/Topic - Attention Mechanism.md").write_text(
+                "---\ntype: topic\n---\n# 重要资料\nAttention research\n",
+                encoding="utf-8",
+            )
+            source_note = Path(tmp) / "03-Knowledge/Literature/Literature - Attention Survey.md"
+            source_note.write_text("---\ntype: literature\n---\ncontent\n", encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "skills/obsidian/obsidian_writer.py",
+                    "--type", "cascade-candidates",
+                    "--target", "03-Knowledge/Literature/Literature - Attention Survey.md",
+                    "--vault", tmp,
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                cwd="D:/AI/claude_code/claude-obsidian",
+            )
+            assert result.returncode == 0
+            assert "[Cascade candidates]" in result.stdout
+            assert "Topic - Attention Mechanism" in result.stdout
+
+    def test_cascade_update_mode_updates_topic_and_logs_cascade(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            topic_dir = Path(tmp) / "03-Knowledge/Topics"
+            topic_dir.mkdir(parents=True, exist_ok=True)
+            target = topic_dir / "Topic - Attention Mechanism.md"
+            target.write_text(
+                "---\ntype: topic\nupdated: 2026-01-01\n---\n# 当前结论\nold\n\n# 重要资料\nold refs\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "skills/obsidian/obsidian_writer.py",
+                    "--type", "cascade-update",
+                    "--target", "03-Knowledge/Topics/Topic - Attention Mechanism.md",
+                    "--fields", '{"当前结论": "new conclusion", "重要资料": "[[Literature - Attention Survey]]"}',
+                    "--vault", tmp,
+                    "--source-note", "Literature - Attention Survey",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                cwd="D:/AI/claude_code/claude-obsidian",
+            )
+            assert result.returncode == 0
+            text = target.read_text(encoding="utf-8")
+            assert "new conclusion" in text
+            assert "[[Literature - Attention Survey]]" in text
+            assert "# Supporting notes" in text
+            assert f"updated: {date.today().strftime('%Y-%m-%d')}" in text
+            log_text = (Path(tmp) / _LOG_FILE).read_text(encoding="utf-8")
+            assert "cascade | Topic - Attention Mechanism" in log_text
+
+    def test_cascade_update_rejects_non_topic_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            topic_dir = Path(tmp) / "03-Knowledge/Topics"
+            topic_dir.mkdir(parents=True, exist_ok=True)
+            target = topic_dir / "Topic - Attention Mechanism.md"
+            target.write_text("---\ntype: topic\n---\n", encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "skills/obsidian/obsidian_writer.py",
+                    "--type", "cascade-update",
+                    "--target", "03-Knowledge/Topics/Topic - Attention Mechanism.md",
+                    "--fields", '{"核心机制": "should fail"}',
+                    "--vault", tmp,
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                cwd="D:/AI/claude_code/claude-obsidian",
+            )
+            assert result.returncode != 0
+            assert "cascade-update only supports topic fields" in result.stderr
+
+    def test_conflict_update_mode_adds_conflict_and_logs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            topic_dir = Path(tmp) / "03-Knowledge/Topics"
+            topic_dir.mkdir(parents=True, exist_ok=True)
+            target = topic_dir / "Topic - Attention Mechanism.md"
+            target.write_text("---\ntype: topic\nupdated: 2026-01-01\n---\n# 当前结论\nold\n", encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "skills/obsidian/obsidian_writer.py",
+                    "--type", "conflict-update",
+                    "--target", "03-Knowledge/Topics/Topic - Attention Mechanism.md",
+                    "--fields", '{"claim": "New benchmark reverses the old conclusion."}',
+                    "--vault", tmp,
+                    "--source-note", "Literature - New Benchmark",
+                    "--conflicts-with", "[[Literature - FlashAttention Survey]]",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                cwd="D:/AI/claude_code/claude-obsidian",
+            )
+            assert result.returncode == 0
+            text = target.read_text(encoding="utf-8")
+            assert "# Conflicts" in text
+            assert "Source: [[Literature - New Benchmark]]" in text
+            assert "Claim: New benchmark reverses the old conclusion." in text
+            assert f"updated: {date.today().strftime('%Y-%m-%d')}" in text
+            log_text = (Path(tmp) / _LOG_FILE).read_text(encoding="utf-8")
+            assert "conflict | Topic - Attention Mechanism" in log_text
+
+    def test_conflict_update_requires_claim(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            topic_dir = Path(tmp) / "03-Knowledge/Topics"
+            topic_dir.mkdir(parents=True, exist_ok=True)
+            target = topic_dir / "Topic - Attention Mechanism.md"
+            target.write_text("---\ntype: topic\n---\n", encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "skills/obsidian/obsidian_writer.py",
+                    "--type", "conflict-update",
+                    "--target", "03-Knowledge/Topics/Topic - Attention Mechanism.md",
+                    "--fields", '{}',
+                    "--vault", tmp,
+                    "--source-note", "Literature - New Benchmark",
+                    "--conflicts-with", "[[Literature - FlashAttention Survey]]",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                cwd="D:/AI/claude_code/claude-obsidian",
+            )
+            assert result.returncode != 0
+            assert "conflict-update requires fields.claim" in result.stderr
+
+    def test_ingest_sync_mode_runs_full_update_plan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lit_dir = Path(tmp) / "03-Knowledge/Literature"
+            topic_dir = Path(tmp) / "03-Knowledge/Topics"
+            lit_dir.mkdir(parents=True, exist_ok=True)
+            topic_dir.mkdir(parents=True, exist_ok=True)
+            primary = lit_dir / "Literature - Attention Survey.md"
+            primary.write_text(
+                "---\ntype: literature\nupdated: 2026-01-01\n---\n# 核心观点\nold\n",
+                encoding="utf-8",
+            )
+            topic = topic_dir / "Topic - Attention Mechanism.md"
+            topic.write_text(
+                "---\ntype: topic\nupdated: 2026-01-01\n---\n# 当前结论\nold topic\n",
+                encoding="utf-8",
+            )
+            plan = (
+                '{'
+                '"primary_fields":{"核心观点":"new primary synthesis"},'
+                '"source_note":"Literature - New Benchmark",'
+                '"source_ref":"OpenAI, 2026-04-13",'
+                '"cascade_updates":[{"target":"03-Knowledge/Topics/Topic - Attention Mechanism.md","fields":{"当前结论":"new topic conclusion"}}],'
+                '"conflicts":[{"target":"03-Knowledge/Topics/Topic - Attention Mechanism.md","claim":"New benchmark reverses the old conclusion.","conflicts_with":"[[Literature - FlashAttention Survey]]"}]'
+                '}'
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "skills/obsidian/obsidian_writer.py",
+                    "--type", "ingest-sync",
+                    "--target", "03-Knowledge/Literature/Literature - Attention Survey.md",
+                    "--fields", plan,
+                    "--vault", tmp,
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                cwd="D:/AI/claude_code/claude-obsidian",
+            )
+            assert result.returncode == 0
+            assert "[OK] Ingest sync applied" in result.stdout
+            primary_text = primary.read_text(encoding="utf-8")
+            topic_text = topic.read_text(encoding="utf-8")
+            assert "new primary synthesis" in primary_text
+            assert "new topic conclusion" in topic_text
+            assert "# Conflicts" in topic_text
 
     def test_write_mode_prints_topic_suggestion_when_no_topic_match_exists(self):
         with tempfile.TemporaryDirectory() as tmp:

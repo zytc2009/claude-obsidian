@@ -22,6 +22,7 @@ Your Obsidian Vault
   │   ├── MOCs/                   ← maps of content
   │   └── Topics/                 ← topic summaries
   └── 04-Archive/                 ← archived notes
+  └── _log.md                     ← append-only operation log
 ```
 
 ## Operations
@@ -142,6 +143,98 @@ Rebuild `_index.md` at the vault root — a global navigation page listing all n
 /obsidian index
 ```
 
+### `merge-candidates` — Find likely merge targets
+
+Surface existing `literature` notes whose title/body overlap enough to be considered merge-first candidates during ingest.
+
+```bash
+python skills/obsidian/obsidian_writer.py \
+  --type merge-candidates \
+  --title "Attention Survey"
+```
+
+### `merge-update` — Merge into an existing note
+
+After the model decides a new source should update an existing `literature` note instead of creating a new one, use `merge-update` to replace the chosen sections and attach source lineage.
+
+```bash
+python skills/obsidian/obsidian_writer.py \
+  --type merge-update \
+  --target "03-Knowledge/Literature/Literature - Attention Is All You Need.md" \
+  --fields '{"核心观点": "...", "方法要点": "..."}' \
+  --source-note "Literature - Attention Survey" \
+  --source-ref "OpenAI, 2026-04-13"
+```
+
+This also refreshes the note's `updated` frontmatter field.
+
+### `cascade-candidates` — Find likely topic pages to refresh
+
+After a source note is created or merged, surface matching `topic` pages that may need a narrow synthesis update.
+
+```bash
+python skills/obsidian/obsidian_writer.py \
+  --type cascade-candidates \
+  --target "03-Knowledge/Literature/Literature - Attention Survey.md"
+```
+
+### `cascade-update` — Narrow topic update
+
+Apply a conservative update to an existing `topic` note. This command only accepts topic-level synthesis fields.
+
+```bash
+python skills/obsidian/obsidian_writer.py \
+  --type cascade-update \
+  --target "03-Knowledge/Topics/Topic - Attention Mechanism.md" \
+  --fields '{"当前结论": "...", "重要资料": "[[Literature - Attention Survey]]"}' \
+  --source-note "Literature - Attention Survey"
+```
+
+This also refreshes the topic note's `updated` frontmatter field.
+
+### `conflict-update` — Add an explicit conflict annotation
+
+When a new source concretely disagrees with an existing note, append a structured entry under `# Conflicts` instead of silently overwriting the older claim.
+
+```bash
+python skills/obsidian/obsidian_writer.py \
+  --type conflict-update \
+  --target "03-Knowledge/Topics/Topic - Attention Mechanism.md" \
+  --fields '{"claim": "New benchmark reverses the old conclusion."}' \
+  --source-note "Literature - New Benchmark" \
+  --conflicts-with "[[Literature - FlashAttention Survey]]"
+```
+
+When a new conflict entry is added, the target note's `updated` field is refreshed.
+
+### `ingest-sync` — Apply a full deterministic ingest plan
+
+If the model has already decided the primary update, cascade updates, and conflict annotations, it can send the whole plan in one call instead of invoking multiple subcommands.
+
+```bash
+python skills/obsidian/obsidian_writer.py \
+  --type ingest-sync \
+  --target "03-Knowledge/Literature/Literature - Attention Survey.md" \
+  --fields '{
+    "primary_fields": {"核心观点": "..."},
+    "source_note": "Literature - New Benchmark",
+    "source_ref": "OpenAI, 2026-04-13",
+    "cascade_updates": [
+      {
+        "target": "03-Knowledge/Topics/Topic - Attention Mechanism.md",
+        "fields": {"当前结论": "..."}
+      }
+    ],
+    "conflicts": [
+      {
+        "target": "03-Knowledge/Topics/Topic - Attention Mechanism.md",
+        "claim": "New benchmark reverses the old conclusion.",
+        "conflicts_with": "[[Literature - FlashAttention Survey]]"
+      }
+    ]
+  }'
+```
+
 ### `init` — Initialize vault structure
 
 Create all required directories on first use, then print the resulting tree as confirmation. Safe to re-run — skips directories that already exist.
@@ -246,6 +339,14 @@ python skills/obsidian/obsidian_writer.py \
   --fields '{"核心观点": "...", "方法要点": "..."}' \
   --draft false
 
+# Write a note and attach lineage/source metadata
+python skills/obsidian/obsidian_writer.py \
+  --type topic \
+  --title "RAG" \
+  --fields '{"主题说明": "...", "当前结论": "..."}' \
+  --source-note "Literature - RAG Survey" \
+  --source-ref "Anthropic, 2026-04-13"
+
 # Append a fleeting note
 python skills/obsidian/obsidian_writer.py \
   --type fleeting \
@@ -262,6 +363,43 @@ python skills/obsidian/obsidian_writer.py --type lint --auto-fix
 
 # Rebuild global index (_index.md)
 python skills/obsidian/obsidian_writer.py --type index
+
+# Find literature notes that may be merge targets
+python skills/obsidian/obsidian_writer.py --type merge-candidates --title "Attention Survey"
+
+# Merge updated synthesis into an existing literature note
+python skills/obsidian/obsidian_writer.py \
+  --type merge-update \
+  --target "03-Knowledge/Literature/Literature - Attention Is All You Need.md" \
+  --fields '{"核心观点": "...", "方法要点": "..."}' \
+  --source-note "Literature - Attention Survey" \
+  --source-ref "OpenAI, 2026-04-13"
+
+# Find topic notes that may need a cascade update
+python skills/obsidian/obsidian_writer.py \
+  --type cascade-candidates \
+  --target "03-Knowledge/Literature/Literature - Attention Survey.md"
+
+# Apply a narrow cascade update to a topic note
+python skills/obsidian/obsidian_writer.py \
+  --type cascade-update \
+  --target "03-Knowledge/Topics/Topic - Attention Mechanism.md" \
+  --fields '{"当前结论": "...", "重要资料": "[[Literature - Attention Survey]]"}' \
+  --source-note "Literature - Attention Survey"
+
+# Add an explicit conflict annotation
+python skills/obsidian/obsidian_writer.py \
+  --type conflict-update \
+  --target "03-Knowledge/Topics/Topic - Attention Mechanism.md" \
+  --fields '{"claim": "New benchmark reverses the old conclusion."}' \
+  --source-note "Literature - New Benchmark" \
+  --conflicts-with "[[Literature - FlashAttention Survey]]"
+
+# Apply the whole ingest plan in one call
+python skills/obsidian/obsidian_writer.py \
+  --type ingest-sync \
+  --target "03-Knowledge/Literature/Literature - Attention Survey.md" \
+  --fields '{"primary_fields":{"核心观点":"..."},"source_note":"Literature - New Benchmark","source_ref":"OpenAI, 2026-04-13","cascade_updates":[{"target":"03-Knowledge/Topics/Topic - Attention Mechanism.md","fields":{"当前结论":"..."}}],"conflicts":[{"target":"03-Knowledge/Topics/Topic - Attention Mechanism.md","claim":"New benchmark reverses the old conclusion.","conflicts_with":"[[Literature - FlashAttention Survey]]"}]}'
 
 # Dry-run: preview without writing
 python skills/obsidian/obsidian_writer.py --type topic --title "RAG" \

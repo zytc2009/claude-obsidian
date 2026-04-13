@@ -370,6 +370,7 @@ def write_note(
     title: str,
     fields: dict,
     is_draft: bool,
+    log_operation: bool = True,
 ) -> Path:
     """Render and write a note. Creates target directory if missing."""
     target_dir = get_target_path(vault, note_type, is_draft)
@@ -394,6 +395,13 @@ def write_note(
         section = section_map.get(note_type)
         if section:
             _append_to_index(vault, filepath, section)
+        if log_operation:
+            append_operation_log(
+                vault,
+                "write",
+                filepath.stem,
+                [f"Action: created", f"Path: {filepath.relative_to(vault)}"],
+            )
 
     return filepath
 
@@ -426,6 +434,11 @@ def init_vault(vault: Path) -> None:
             if not top_dir.exists():
                 top_dir.mkdir(parents=True, exist_ok=True)
                 created.append(top)
+
+    log_path = vault / _LOG_FILE
+    if not log_path.exists():
+        log_path.write_text("# Vault Operation Log\n", encoding="utf-8")
+        created.append(_LOG_FILE)
 
     if created:
         print(f"[OK] Created {len(created)} director{'y' if len(created) == 1 else 'ies'}:")
@@ -582,6 +595,7 @@ def _topic_candidate_from_stem(stem: str) -> str:
 # ---------------------------------------------------------------------------
 
 _INDEX_FILE = "_index.md"
+_LOG_FILE = "_log.md"
 
 _INDEX_DIRS = [
     ("02-Projects", "Projects"),
@@ -590,6 +604,11 @@ _INDEX_DIRS = [
     ("03-Knowledge/Concepts", "Concepts"),
     ("03-Knowledge/Literature", "Literature"),
 ]
+
+_SUPPORTING_SECTION_TITLE = "# Supporting notes"
+_SOURCES_SECTION_TITLE = "# Sources"
+_CONFLICTS_SECTION_TITLE = "# Conflicts"
+_TOPIC_CASCADE_FIELDS = {"主题说明", "核心问题", "重要资料", "相关项目", "当前结论", "未解决问题"}
 
 
 def _index_entry(note_path: Path, vault: Path) -> str:
@@ -607,6 +626,307 @@ def _index_entry(note_path: Path, vault: Path) -> str:
     if updated:
         parts.append(f" ({updated})")
     return "".join(parts)
+
+
+def _today_str() -> str:
+    return date.today().strftime("%Y-%m-%d")
+
+
+def _ensure_parent(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+
+def append_operation_log(
+    vault: Path,
+    operation: str,
+    title: str = "",
+    details: list[str] | None = None,
+) -> Path:
+    """Append an operation entry to the vault log."""
+    log_path = vault / _LOG_FILE
+    _ensure_parent(log_path)
+    if not log_path.exists():
+        log_path.write_text("# Vault Operation Log\n", encoding="utf-8")
+
+    lines = ["", f"## [{_today_str()}] {operation}"]
+    if title:
+        lines[0] = ""
+        lines[1] = f"## [{_today_str()}] {operation} | {title}"
+    for detail in details or []:
+        lines.append(f"- {detail}")
+
+    with log_path.open("a", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    return log_path
+
+
+def _append_bullet_to_section(text: str, section_title: str, bullet: str) -> str:
+    """Append a bullet under a markdown section, creating the section if needed."""
+    bullet_line = f"- {bullet}"
+    if bullet_line in text:
+        return text
+
+    lines = text.splitlines(keepends=True)
+    insert_at = len(lines)
+    in_section = False
+    for i, line in enumerate(lines):
+        if line.strip() == section_title:
+            in_section = True
+            continue
+        if in_section and line.startswith("# "):
+            insert_at = i
+            break
+
+    if in_section:
+        prefix = "" if insert_at == 0 or (insert_at > 0 and lines[insert_at - 1].endswith("\n")) else "\n"
+        lines.insert(insert_at, prefix + bullet_line + "\n")
+        return "".join(lines)
+
+    text = text.rstrip("\n")
+    return f"{text}\n\n{section_title}\n{bullet_line}\n"
+
+
+def add_supporting_note(note_path: Path, supporting_note_stem: str) -> bool:
+    """Add a supporting-note bullet if it is not already present."""
+    text = note_path.read_text(encoding="utf-8", errors="replace")
+    updated = _append_bullet_to_section(
+        text, _SUPPORTING_SECTION_TITLE, f"[[{supporting_note_stem}]]"
+    )
+    if updated == text:
+        return False
+    note_path.write_text(updated, encoding="utf-8")
+    return True
+
+
+def add_source_reference(note_path: Path, source_label: str) -> bool:
+    """Add a source reference bullet if it is not already present."""
+    text = note_path.read_text(encoding="utf-8", errors="replace")
+    updated = _append_bullet_to_section(text, _SOURCES_SECTION_TITLE, source_label)
+    if updated == text:
+        return False
+    note_path.write_text(updated, encoding="utf-8")
+    return True
+
+
+def add_conflict_annotation(
+    note_path: Path,
+    source_note: str,
+    claim: str,
+    conflicts_with: str,
+    status: str = "unresolved",
+) -> bool:
+    """Append a conflict entry under # Conflicts if it is not already present."""
+    source_line = f"Source: [[{source_note}]]"
+    claim_line = f"Claim: {claim.strip()}"
+    conflicts_line = f"Conflicts with: {conflicts_with.strip()}"
+    status_line = f"Status: {status.strip() or 'unresolved'}"
+    block = "\n".join(
+        [
+            source_line,
+            claim_line,
+            conflicts_line,
+            status_line,
+        ]
+    )
+
+    text = note_path.read_text(encoding="utf-8", errors="replace")
+    if block in text:
+        return False
+
+    updated = _append_bullet_to_section(
+        text,
+        _CONFLICTS_SECTION_TITLE,
+        f"{source_line}\n  {claim_line}\n  {conflicts_line}\n  {status_line}",
+    )
+    if updated == text:
+        return False
+    note_path.write_text(updated, encoding="utf-8")
+    return True
+
+
+def update_note_sections(note_path: Path, fields: dict) -> list[str]:
+    """Replace or append top-level markdown sections from fields."""
+    if not fields:
+        return []
+
+    text = note_path.read_text(encoding="utf-8", errors="replace")
+    changed_sections = []
+
+    for key, value in fields.items():
+        section_title = f"# {key}"
+        replacement = str(value).strip()
+        pattern = rf"(?ms)^# {re.escape(key)}\n(.*?)(?=^# |\Z)"
+        replacement_block = f"{section_title}\n{replacement}\n\n"
+        new_text, count = re.subn(pattern, replacement_block, text)
+        if count:
+            if new_text != text:
+                text = new_text
+                changed_sections.append(key)
+            continue
+
+        if text.endswith("\n"):
+            text = text.rstrip("\n")
+        text = f"{text}\n\n{section_title}\n{replacement}\n"
+        changed_sections.append(key)
+
+    note_path.write_text(text, encoding="utf-8")
+    return changed_sections
+
+
+def find_merge_candidates(vault: Path, title: str, limit: int = 5) -> list[Path]:
+    """Return likely literature merge candidates based on title keywords."""
+    literature_dir = vault / "03-Knowledge/Literature"
+    if not literature_dir.exists():
+        return []
+
+    keywords = [word.lower() for word in _suggestion_keywords_from_stem(title)]
+    if not keywords:
+        keywords = [word.lower() for word in re.split(r"[\s\-_]+", title) if len(word) >= 4]
+    if not keywords:
+        return []
+
+    scored = []
+    for md_file in literature_dir.glob("*.md"):
+        stem = md_file.stem.lower()
+        try:
+            body = md_file.read_text(encoding="utf-8", errors="replace").lower()
+        except OSError:
+            body = ""
+        title_hits = sum(1 for kw in keywords if kw in stem)
+        body_hits = sum(1 for kw in keywords if kw in body)
+        score = title_hits * 2 + body_hits
+        if score > 0:
+            scored.append((score, md_file))
+
+    scored.sort(key=lambda item: (-item[0], str(item[1])))
+    return [path for _, path in scored[:limit]]
+
+
+def find_cascade_candidates(vault: Path, note_path: Path, limit: int = 3) -> list[tuple[Path, str]]:
+    """Return likely topic notes for narrow cascade updates."""
+    suggestions = suggest_links(vault, note_path)
+    candidates = []
+    for rel, reason in suggestions:
+        rel_path = Path(rel)
+        if "Topics" not in rel_path.parts:
+            continue
+        candidates.append((vault / rel_path, reason))
+    return candidates[:limit]
+
+
+def _resolve_vault_path(vault: Path, target_arg: str) -> Path:
+    path = Path(target_arg)
+    if not path.is_absolute():
+        path = vault / path
+    return path
+
+
+def run_ingest_sync(vault: Path, target_path: Path, plan: dict) -> dict:
+    """Apply a deterministic ingest plan in one shot.
+
+    Expected plan shape:
+    {
+      "primary_fields": {...},
+      "source_note": "...",
+      "source_ref": "...",
+      "cascade_updates": [{"target": "...", "fields": {...}, "source_note": "..."}],
+      "conflicts": [{"target": "...", "claim": "...", "conflicts_with": "...", "source_note": "...", "status": "..."}]
+    }
+    """
+    if not target_path.exists():
+        raise FileNotFoundError(f"target note not found: {target_path}")
+
+    summary = {
+        "primary_updates": [],
+        "cascade_updates": [],
+        "conflicts": [],
+    }
+
+    primary_fields = plan.get("primary_fields") or {}
+    source_note = (plan.get("source_note") or "").strip()
+    source_ref = (plan.get("source_ref") or "").strip()
+    primary_changes = []
+    changed_sections = update_note_sections(target_path, primary_fields)
+    if changed_sections:
+        primary_changes.append(f"Sections updated: {', '.join(changed_sections)}")
+    if source_note and add_supporting_note(target_path, source_note):
+        primary_changes.append(f"Supporting note: [[{source_note}]]")
+    if source_ref and add_source_reference(target_path, source_ref):
+        primary_changes.append(f"Source added: {source_ref}")
+    if primary_changes:
+        touch_updated(target_path)
+        primary_changes.append(f"Updated date: {_today_str()}")
+    summary["primary_updates"] = primary_changes
+
+    for cascade in plan.get("cascade_updates") or []:
+        cascade_target = _resolve_vault_path(vault, cascade.get("target", ""))
+        if not cascade_target.exists():
+            raise FileNotFoundError(f"cascade target not found: {cascade_target}")
+        cascade_fields = cascade.get("fields") or {}
+        invalid = [key for key in cascade_fields if key not in _TOPIC_CASCADE_FIELDS]
+        if invalid:
+            raise ValueError(
+                f"cascade-update only supports topic fields: {', '.join(invalid)}"
+            )
+        cascade_note = (cascade.get("source_note") or source_note).strip()
+        cascade_changes = []
+        changed_sections = update_note_sections(cascade_target, cascade_fields)
+        if changed_sections:
+            cascade_changes.append(f"Sections updated: {', '.join(changed_sections)}")
+        if cascade_note and add_supporting_note(cascade_target, cascade_note):
+            cascade_changes.append(f"Supporting note: [[{cascade_note}]]")
+        if cascade_changes:
+            touch_updated(cascade_target)
+            cascade_changes.append(f"Updated date: {_today_str()}")
+        if cascade_changes:
+            summary["cascade_updates"].append(
+                {"target": str(cascade_target.relative_to(vault)), "details": cascade_changes}
+            )
+
+    for conflict in plan.get("conflicts") or []:
+        conflict_target = _resolve_vault_path(vault, conflict.get("target", ""))
+        if not conflict_target.exists():
+            raise FileNotFoundError(f"conflict target not found: {conflict_target}")
+        conflict_source = (conflict.get("source_note") or source_note).strip()
+        claim = (conflict.get("claim") or "").strip()
+        conflicts_with = (conflict.get("conflicts_with") or "").strip()
+        status = (conflict.get("status") or "unresolved").strip()
+        if not conflict_source or not claim or not conflicts_with:
+            raise ValueError("conflict entries require source_note, claim, and conflicts_with")
+        changed = add_conflict_annotation(
+            conflict_target,
+            conflict_source,
+            claim,
+            conflicts_with,
+            status,
+        )
+        details = [
+            f"Conflict source: [[{conflict_source}]]",
+            f"Conflicts with: {conflicts_with}",
+            f"Status: {status}",
+        ]
+        if changed:
+            touch_updated(conflict_target)
+            details.insert(0, "Conflict added")
+            details.append(f"Updated date: {_today_str()}")
+        else:
+            details.insert(0, "Conflict already present")
+        summary["conflicts"].append(
+            {"target": str(conflict_target.relative_to(vault)), "details": details}
+        )
+
+    log_details = []
+    if summary["primary_updates"]:
+        log_details.append(f"Primary target: {target_path.relative_to(vault)}")
+        log_details.extend(summary["primary_updates"])
+    for cascade in summary["cascade_updates"]:
+        log_details.append(f"Cascade-updated: {cascade['target']}")
+    for conflict in summary["conflicts"]:
+        log_details.append(f"Conflict-updated: {conflict['target']}")
+    if not log_details:
+        log_details.append("No content changes")
+    append_operation_log(vault, "ingest-sync", target_path.stem, log_details)
+    return summary
 
 
 def rebuild_index(vault: Path) -> Path:
@@ -717,6 +1037,34 @@ def _parse_frontmatter(text: str) -> dict:
             key, _, val = line.partition(":")
             result[key.strip()] = val.strip()
     return result
+
+
+def _set_frontmatter_field(text: str, key: str, value: str) -> str:
+    """Set or insert a simple frontmatter field."""
+    if not text.startswith("---"):
+        return text
+    end = text.find("---", 3)
+    if end == -1:
+        return text
+
+    pattern = rf"(?m)^({re.escape(key)}:\s*).*$"
+    fm_block = text[:end]
+    rest = text[end:]
+    if re.search(pattern, fm_block):
+        fm_block = re.sub(pattern, lambda m: f"{m.group(1)}{value}", fm_block)
+    else:
+        fm_block = fm_block.rstrip("\n") + f"\n{key}: {value}\n"
+    return fm_block + rest
+
+
+def touch_updated(note_path: Path) -> bool:
+    """Refresh the updated frontmatter field to today."""
+    text = note_path.read_text(encoding="utf-8", errors="replace")
+    new_text = _set_frontmatter_field(text, "updated", _today_str())
+    if new_text == text:
+        return False
+    note_path.write_text(new_text, encoding="utf-8")
+    return True
 
 
 def _extract_wikilinks(text: str) -> set:
@@ -874,6 +1222,22 @@ def lint_vault(vault: Path, auto_fix: bool = False) -> None:
         print("✓ No issues found.")
 
 
+    issue_count = sum(len(items) for _, items in sections)
+    append_operation_log(
+        vault,
+        "lint",
+        details=[
+            f"Broken links: {len(broken)}",
+            f"Orphans: {len(orphans)}",
+            f"Inbox backlog: {len(inbox_backlog)}",
+            f"Skeleton notes: {len(skeletons)}",
+            f"Stale notes: {len(stale)}",
+            f"Auto-fixed: {len(auto_fixes)}",
+            f"Issues found: {issue_count}",
+        ],
+    )
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -885,7 +1249,7 @@ def parse_args(argv=None):
     parser.add_argument(
         "--type",
         required=True,
-        choices=list(NOTE_CONFIG.keys()) + ["fleeting", "init", "lint", "index"],
+        choices=list(NOTE_CONFIG.keys()) + ["fleeting", "init", "lint", "index", "merge-candidates", "merge-update", "cascade-candidates", "cascade-update", "conflict-update", "ingest-sync"],
         help="Note type",
     )
     parser.add_argument(
@@ -894,6 +1258,31 @@ def parse_args(argv=None):
         help="Auto-fix simple issues (missing frontmatter fields) during lint",
     )
     parser.add_argument("--title", default="", help="Note title")
+    parser.add_argument(
+        "--source-note",
+        default="",
+        help="Existing note stem to add under # Supporting notes after writing",
+    )
+    parser.add_argument(
+        "--source-ref",
+        default="",
+        help="Source label to add under # Sources after writing",
+    )
+    parser.add_argument(
+        "--target",
+        default="",
+        help="Target note path for merge-update (absolute or vault-relative)",
+    )
+    parser.add_argument(
+        "--conflicts-with",
+        default="",
+        help="Target note/file/link that this note conflicts with",
+    )
+    parser.add_argument(
+        "--status-label",
+        default="unresolved",
+        help="Conflict status label, default unresolved",
+    )
     parser.add_argument(
         "--fields",
         default="{}",
@@ -920,6 +1309,7 @@ def parse_args(argv=None):
 
 def main(argv=None):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     args = parse_args(argv)
 
     try:
@@ -945,6 +1335,192 @@ def main(argv=None):
     if note_type == "index":
         index_path = rebuild_index(vault)
         print(f"[OK] Index rebuilt: {index_path.relative_to(vault)}")
+        return
+
+    if note_type == "merge-candidates":
+        title = args.title.strip()
+        if not title:
+            print("Error: --title is required for merge-candidates", file=sys.stderr)
+            sys.exit(1)
+        candidates = find_merge_candidates(vault, title)
+        if not candidates:
+            print("[OK] No merge candidates found.")
+            return
+        print("[Merge candidates]")
+        for candidate in candidates:
+            print(f"  -> {candidate.relative_to(vault)}")
+        return
+
+    if note_type == "cascade-candidates":
+        target_arg = args.target.strip()
+        if not target_arg:
+            print("Error: --target is required for cascade-candidates", file=sys.stderr)
+            sys.exit(1)
+        source_path = Path(target_arg)
+        if not source_path.is_absolute():
+            source_path = vault / source_path
+        if not source_path.exists():
+            print(f"Error: source note not found: {source_path}", file=sys.stderr)
+            sys.exit(1)
+        candidates = find_cascade_candidates(vault, source_path)
+        if not candidates:
+            print("[OK] No cascade candidates found.")
+            return
+        print("[Cascade candidates]")
+        for candidate, reason in candidates:
+            print(f"  -> {candidate.relative_to(vault)} ({reason})")
+        return
+
+    if note_type == "merge-update":
+        target_arg = args.target.strip()
+        if not target_arg:
+            print("Error: --target is required for merge-update", file=sys.stderr)
+            sys.exit(1)
+        target_path = Path(target_arg)
+        if not target_path.is_absolute():
+            target_path = vault / target_path
+        if not target_path.exists():
+            print(f"Error: target note not found: {target_path}", file=sys.stderr)
+            sys.exit(1)
+
+        changed_sections = update_note_sections(target_path, fields)
+        merge_updates = []
+        if changed_sections:
+            merge_updates.append(f"Sections updated: {', '.join(changed_sections)}")
+        if args.source_note and add_supporting_note(target_path, args.source_note):
+            merge_updates.append(f"Supporting note: [[{args.source_note}]]")
+        if args.source_ref and add_source_reference(target_path, args.source_ref):
+            merge_updates.append(f"Source added: {args.source_ref}")
+        if merge_updates and merge_updates != ["No content changes"] and touch_updated(target_path):
+            merge_updates.append(f"Updated date: {_today_str()}")
+        if not merge_updates:
+            merge_updates.append("No content changes")
+
+        append_operation_log(vault, "merge", target_path.stem, merge_updates)
+        print(f"[OK] Merged into: {target_path.relative_to(vault)}")
+        if merge_updates:
+            print("\n[Merge updates]")
+            for item in merge_updates:
+                print(f"  -> {item}")
+        return
+
+    if note_type == "cascade-update":
+        target_arg = args.target.strip()
+        if not target_arg:
+            print("Error: --target is required for cascade-update", file=sys.stderr)
+            sys.exit(1)
+        target_path = Path(target_arg)
+        if not target_path.is_absolute():
+            target_path = vault / target_path
+        if not target_path.exists():
+            print(f"Error: target note not found: {target_path}", file=sys.stderr)
+            sys.exit(1)
+
+        invalid = [key for key in fields if key not in _TOPIC_CASCADE_FIELDS]
+        if invalid:
+            print(
+                f"Error: cascade-update only supports topic fields: {', '.join(invalid)}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        changed_sections = update_note_sections(target_path, fields)
+        cascade_updates = []
+        if changed_sections:
+            cascade_updates.append(f"Sections updated: {', '.join(changed_sections)}")
+        if args.source_note and add_supporting_note(target_path, args.source_note):
+            cascade_updates.append(f"Supporting note: [[{args.source_note}]]")
+        if cascade_updates and cascade_updates != ["No content changes"] and touch_updated(target_path):
+            cascade_updates.append(f"Updated date: {_today_str()}")
+        if not cascade_updates:
+            cascade_updates.append("No content changes")
+
+        append_operation_log(vault, "cascade", target_path.stem, cascade_updates)
+        print(f"[OK] Cascade-updated: {target_path.relative_to(vault)}")
+        print("\n[Cascade updates]")
+        for item in cascade_updates:
+            print(f"  -> {item}")
+        return
+
+    if note_type == "conflict-update":
+        target_arg = args.target.strip()
+        if not target_arg:
+            print("Error: --target is required for conflict-update", file=sys.stderr)
+            sys.exit(1)
+        if not args.source_note.strip():
+            print("Error: --source-note is required for conflict-update", file=sys.stderr)
+            sys.exit(1)
+        claim = (fields.get("claim") or "").strip()
+        if not claim:
+            print("Error: conflict-update requires fields.claim", file=sys.stderr)
+            sys.exit(1)
+        conflicts_with = args.conflicts_with.strip()
+        if not conflicts_with:
+            print("Error: --conflicts-with is required for conflict-update", file=sys.stderr)
+            sys.exit(1)
+
+        target_path = Path(target_arg)
+        if not target_path.is_absolute():
+            target_path = vault / target_path
+        if not target_path.exists():
+            print(f"Error: target note not found: {target_path}", file=sys.stderr)
+            sys.exit(1)
+
+        changed = add_conflict_annotation(
+            target_path,
+            args.source_note.strip(),
+            claim,
+            conflicts_with,
+            args.status_label.strip() or "unresolved",
+        )
+        if changed:
+            touch_updated(target_path)
+        details = [
+            f"Conflict source: [[{args.source_note.strip()}]]",
+            f"Conflicts with: {conflicts_with}",
+            f"Status: {args.status_label.strip() or 'unresolved'}",
+        ]
+        if changed:
+            details.insert(0, "Conflict added")
+            details.append(f"Updated date: {_today_str()}")
+        else:
+            details.insert(0, "Conflict already present")
+        append_operation_log(vault, "conflict", target_path.stem, details)
+        print(f"[OK] Conflict-updated: {target_path.relative_to(vault)}")
+        print("\n[Conflict updates]")
+        for item in details:
+            print(f"  -> {item}")
+        return
+
+    if note_type == "ingest-sync":
+        target_arg = args.target.strip()
+        if not target_arg:
+            print("Error: --target is required for ingest-sync", file=sys.stderr)
+            sys.exit(1)
+        target_path = _resolve_vault_path(vault, target_arg)
+        try:
+            summary = run_ingest_sync(vault, target_path, fields)
+        except (FileNotFoundError, ValueError) as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        print(f"[OK] Ingest sync applied: {target_path.relative_to(vault)}")
+        if summary["primary_updates"]:
+            print("\n[Primary updates]")
+            for item in summary["primary_updates"]:
+                print(f"  -> {item}")
+        if summary["cascade_updates"]:
+            print("\n[Cascade updates]")
+            for cascade in summary["cascade_updates"]:
+                print(f"  -> {cascade['target']}")
+                for item in cascade["details"]:
+                    print(f"     {item}")
+        if summary["conflicts"]:
+            print("\n[Conflict updates]")
+            for conflict in summary["conflicts"]:
+                print(f"  -> {conflict['target']}")
+                for item in conflict["details"]:
+                    print(f"     {item}")
         return
 
     # --- Fleeting: special case ---
@@ -992,6 +1568,17 @@ def main(argv=None):
 
     rel_path = filepath.relative_to(vault)
     print(f"[OK] Written: {rel_path}")
+
+    post_write_updates = []
+    if args.source_note and add_supporting_note(filepath, args.source_note):
+        post_write_updates.append(f"Supporting note: [[{args.source_note}]]")
+    if args.source_ref and add_source_reference(filepath, args.source_ref):
+        post_write_updates.append(f"Source added: {args.source_ref}")
+    if post_write_updates:
+        append_operation_log(vault, "update", filepath.stem, post_write_updates)
+        print("\n[Post-write updates]")
+        for item in post_write_updates:
+            print(f"  -> {item}")
 
     suggestions = suggest_links(vault, filepath)
     if suggestions:
