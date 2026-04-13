@@ -43,7 +43,7 @@ python ~/.claude/scripts/obsidian_writer.py \
 
 ## MODE: capture — 抓取外部内容
 
-**Goal:** 从 URL 或本地文件获取内容，整理成 literature 笔记。
+**Goal:** 从 URL 或本地文件获取内容，整理成 literature 笔记。默认走 ingest-sync 路径：提取完字段后先出 preview，用户一次性确认再写入。
 
 ### Step C1: 获取原始内容
 
@@ -70,11 +70,58 @@ python ~/.claude/scripts/obsidian_writer.py \
 - `验证实验`: 可以做哪些实验验证
 - `知识连接`: 与已有笔记的关联
 
-### Step C3: 确认标题
+标题直接取原文标题，不要自己编造。
 
-用原文章节名或文章标题，不要自己编造。
+### Step C3: 置信度判断
 
-### Step C4: 写入笔记
+判断是否满足"高置信度"条件（两项必填字段均有内容）：
+
+- `核心观点` 已填写
+- `方法要点` 已填写
+
+**低置信度**（任意一项为空）→ 直接走 **create-only 路径**（Step C4b），跳过 preview。
+**高置信度** → 走默认的 **ingest-sync 路径**（Step C4a）。
+
+### Step C4a: Ingest preview（高置信度，默认路径）
+
+先跑 `--dry-run` 生成 ingest plan，展示给用户：
+
+```bash
+python ~/.claude/scripts/obsidian_writer.py \
+  --type literature \
+  --title "<标题>" \
+  --fields '<JSON字段>' \
+  --draft false \
+  --dry-run
+```
+
+输出包含：
+- `Action`：`create`（新笔记）或 `merge`（已有同名笔记，将创建带日期副本）
+- `Target`：目标路径
+- `Existing` + `Diff`：如果是 merge，显示现有笔记与新内容的 section 差异
+- `[Link suggestions]`：写入后会被建议关联的 topic/MOC
+
+展示 preview 后，询问用户：**"确认写入？(y/n)"**
+
+收到确认后执行 Step C5 写入。用户说"不"或要求修改，则按反馈调整字段后重新 preview。
+
+### Step C4b: Create-only（低置信度回退路径）
+
+字段不足，直接写入 Inbox，不出 preview：
+
+```bash
+python ~/.claude/scripts/obsidian_writer.py \
+  --type literature \
+  --title "<标题>" \
+  --fields '<JSON字段>' \
+  --draft true
+```
+
+告知用户：草稿已存入 Inbox，建议补充：[列出空缺的必填字段]
+
+### Step C5: 执行写入（ingest-sync 路径专用）
+
+用户确认 preview 后执行实际写入：
 
 ```bash
 python ~/.claude/scripts/obsidian_writer.py \
@@ -84,11 +131,9 @@ python ~/.claude/scripts/obsidian_writer.py \
   --draft false
 ```
 
-如果提取字段不到一半（`核心观点` 和 `方法要点` 都空），设 `--draft true`。
+### Step C6: 关联建议
 
-### Step C5: 关联建议
-
-脚本会自动输出 `[Link suggestions]`，展示给用户，并询问是否自动添加链接。
+脚本输出 `[Link suggestions]`，询问是否自动添加链接。
 如果用户确认，用 Read + Edit 工具将 `[[新笔记名]]` 添加到建议的区块末尾。
 
 ---

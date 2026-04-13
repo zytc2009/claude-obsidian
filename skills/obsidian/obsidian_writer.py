@@ -591,6 +591,63 @@ def _topic_candidate_from_stem(stem: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Ingest preview helpers
+# ---------------------------------------------------------------------------
+
+def _classify_ingest_action(
+    vault: Path, note_type: str, title: str, is_draft: bool
+) -> tuple[str, "Path | None", Path]:
+    """Return (action, existing_path_or_None, planned_write_path).
+
+    action values:
+      'create' — no collision, net-new note
+      'merge'  — base filename exists; a dated copy will be written instead
+    """
+    target_dir = get_target_path(vault, note_type, is_draft)
+    prefix = NOTE_CONFIG[note_type]["prefix"]
+    base_path = target_dir / f"{prefix} - {title}.md"
+
+    if not base_path.exists():
+        return "create", None, base_path
+
+    today = date.today().strftime("%Y-%m-%d")
+    dated_path = target_dir / f"{prefix} - {title} {today}.md"
+    return "merge", base_path, dated_path
+
+
+def _section_diff_summary(existing_path: Path, new_content: str) -> str:
+    """One-line summary of which H1 sections differ between existing and new note."""
+    existing_text = existing_path.read_text(encoding="utf-8", errors="replace")
+
+    def _h1_sections(text: str) -> dict[str, str]:
+        secs: dict[str, str] = {}
+        cur: str | None = None
+        buf: list[str] = []
+        for line in text.splitlines():
+            if line.startswith("# "):
+                if cur is not None:
+                    secs[cur] = " ".join(buf)
+                cur = line[2:].strip()
+                buf = []
+            elif cur is not None and line.strip():
+                buf.append(line.strip())
+        if cur is not None:
+            secs[cur] = " ".join(buf)
+        return secs
+
+    old = _h1_sections(existing_text)
+    new = _h1_sections(new_content)
+    diffs = []
+    for sec, nv in new.items():
+        ov = old.get(sec, "")
+        if not ov and nv:
+            diffs.append(f"{sec}: (empty→{len(nv)}c)")
+        elif ov and nv and ov != nv:
+            diffs.append(f"{sec}: ({len(ov)}c→{len(nv)}c)")
+    return " | ".join(diffs[:5]) if diffs else "no section differences"
+
+
+# ---------------------------------------------------------------------------
 # Index maintenance
 # ---------------------------------------------------------------------------
 
@@ -1551,11 +1608,28 @@ def main(argv=None):
 
     if args.dry_run:
         content = RENDERERS[note_type](title, fields, is_draft)
-        target_dir = get_target_path(vault, note_type, is_draft)
-        prefix = NOTE_CONFIG[note_type]["prefix"]
-        filename = make_filename(prefix, title, target_dir)
-        print(f"[DRY RUN] Would write to: {target_dir / filename}\n")
+        action, existing_path, planned_path = _classify_ingest_action(
+            vault, note_type, title, is_draft
+        )
+        SEP = "─" * 52
+        print("[INGEST PREVIEW]")
+        print(SEP)
+        print(f"Action  : {action}")
+        print(f"Target  : {planned_path.relative_to(vault)}")
+        if existing_path:
+            print(f"Existing: {existing_path.relative_to(vault)}")
+            print(f"Diff    : {_section_diff_summary(existing_path, content)}")
+        print(SEP)
         print(content)
+        print(SEP)
+        suggestions = suggest_links(vault, planned_path)
+        if suggestions:
+            print("[Link suggestions]")
+            for rel, section in suggestions:
+                print(f"  → {rel}  ({section}  ← add [[{planned_path.stem}]])")
+            new_topic_hint = suggest_new_topic(planned_path, suggestions)
+            if new_topic_hint:
+                print(f"\n[Topic suggestion]\n  {new_topic_hint}")
         return
 
     filepath = write_note(
