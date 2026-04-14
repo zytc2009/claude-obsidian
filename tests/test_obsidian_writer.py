@@ -1,3 +1,4 @@
+import json
 import subprocess
 import sys
 import tempfile
@@ -6,10 +7,17 @@ from pathlib import Path
 
 import pytest
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SCRIPT_PATH = REPO_ROOT / "skills" / "obsidian" / "obsidian_writer.py"
+
 from skills.obsidian.obsidian_writer import (
     NOTE_CONFIG,
+    _CORRECTIONS_FILE,
+    _EVENTS_FILE,
     _INDEX_FILE,
+    _LOG_ARCHIVE_FILE,
     _LOG_FILE,
+    _MAX_LOG_ENTRIES,
     _append_to_index,
     _classify_ingest_action,
     _extract_wikilinks,
@@ -17,6 +25,7 @@ from skills.obsidian.obsidian_writer import (
     _section_diff_summary,
     _suggestion_keywords_from_stem,
     add_conflict_annotation,
+    append_suggestion_feedback,
     add_source_reference,
     add_supporting_note,
     append_operation_log,
@@ -397,6 +406,50 @@ class TestOperationLog:
             assert "write | Literature - Test" in text
             assert "Action: created" in text
 
+    def test_rotates_entries_after_500_records(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            for i in range(_MAX_LOG_ENTRIES + 1):
+                append_operation_log(vault, "write", f"Entry {i}", [f"Index: {i}"])
+
+            log_text = (vault / _LOG_FILE).read_text(encoding="utf-8")
+            archive_text = (vault / _LOG_ARCHIVE_FILE).read_text(encoding="utf-8")
+
+            assert "Entry 0" not in log_text
+            assert "Entry 1" in log_text
+            assert "Entry 500" in log_text
+            assert "Entry 0" in archive_text
+            assert "# Vault Operation Log Archive" in archive_text
+
+
+class TestSuggestionFeedback:
+    def test_append_suggestion_feedback_writes_jsonl_and_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            events_path = append_suggestion_feedback(
+                vault,
+                suggestion_type="link",
+                action="reject",
+                source_note="Literature - Attention Survey",
+                target_notes=["Topic - Attention", "MOC - Transformers"],
+                reason="too broad",
+            )
+
+            events = [
+                json.loads(line)
+                for line in events_path.read_text(encoding="utf-8").splitlines()
+            ]
+            assert events[0]["event_type"] == "suggestion_feedback"
+            assert events[0]["suggestion_type"] == "link"
+            assert events[0]["action"] == "reject"
+            assert events[0]["target_notes"] == ["Topic - Attention", "MOC - Transformers"]
+            assert events[0]["reason"] == "too broad"
+
+            log_text = (vault / _LOG_FILE).read_text(encoding="utf-8")
+            assert "suggestion-feedback | Literature - Attention Survey" in log_text
+            assert "Suggestion type: link" in log_text
+            assert "Action: reject" in log_text
+
 
 class TestSupportingSections:
     def test_add_supporting_note_creates_section(self):
@@ -573,6 +626,12 @@ class TestLintVault:
             out = capsys.readouterr().out
             assert "Concept - NonExistent" in out
             assert "Broken links" in out
+            events = [
+                json.loads(line)
+                for line in (vault / _CORRECTIONS_FILE).read_text(encoding="utf-8").splitlines()
+            ]
+            assert any(event["issue_type"] == "broken-link" for event in events)
+            assert any(event["note"].endswith("MOC - AI.md") for event in events)
 
     def test_detects_orphan_note(self, capsys):
         with tempfile.TemporaryDirectory() as tmp:
@@ -665,13 +724,29 @@ class TestLintVault:
             assert "status:" in content
             assert "created:" in content
 
+    def test_records_missing_frontmatter_in_corrections_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self._make_vault(tmp)
+            note = vault / "03-Knowledge/Concepts/Concept - NoStatus.md"
+            self._write(note, "---\ntype: concept\n---\n# content\n")
+            lint_vault(vault)
+            events = [
+                json.loads(line)
+                for line in (vault / _CORRECTIONS_FILE).read_text(encoding="utf-8").splitlines()
+            ]
+            assert any(
+                event["issue_type"] == "missing-frontmatter"
+                and event["note"].endswith("Concept - NoStatus.md")
+                for event in events
+            )
+
     def test_cli_lint_runs_successfully(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = subprocess.run(
-                [sys.executable, "skills/obsidian/obsidian_writer.py",
+                [sys.executable, str(SCRIPT_PATH),
                  "--type", "lint", "--vault", tmp],
                 capture_output=True, text=True, encoding="utf-8",
-                cwd="D:/AI/claude_code/claude-obsidian",
+                cwd=str(REPO_ROOT),
             )
             assert result.returncode == 0
             assert "[Lint]" in result.stdout
@@ -759,6 +834,30 @@ class TestSuggestLinks:
             suggestions = suggest_links(vault, new_note)
             assert any("Topic - RAG" in str(path) for path, _ in suggestions)
             assert all("2026" not in reason for _, reason in suggestions)
+
+    def test_reject_feedback_downranks_previous_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self._make_vault(tmp)
+            topic = vault / "03-Knowledge/Topics/Topic - Attention Mechanism.md"
+            moc = vault / "03-Knowledge/MOCs/MOC - Attention.md"
+            self._write(topic, "---\ntype: topic\n---\n# 重要资料\nAttention research\n")
+            self._write(moc, "---\ntype: moc\n---\n# 资料\nAttention links\n")
+            new_note = vault / "03-Knowledge/Literature/Literature - Attention Survey.md"
+            self._write(new_note, "---\ntype: literature\n---\ncontent\n")
+
+            append_suggestion_feedback(
+                vault,
+                suggestion_type="link",
+                action="reject",
+                source_note="Literature - Attention Survey",
+                target_notes=["Topic - Attention Mechanism"],
+                reason="too broad",
+            )
+
+            suggestions = suggest_links(vault, new_note)
+            paths = [str(path) for path, _ in suggestions]
+            assert "03-Knowledge/MOCs/MOC - Attention.md" in paths[0]
+            assert all("Topic - Attention Mechanism" not in str(path) for path, _ in suggestions)
 
 
 class TestFindMergeCandidates:
@@ -898,10 +997,10 @@ class TestRebuildIndex:
     def test_cli_index_runs_successfully(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = subprocess.run(
-                [sys.executable, "skills/obsidian/obsidian_writer.py",
+                [sys.executable, str(SCRIPT_PATH),
                  "--type", "index", "--vault", tmp],
                 capture_output=True, text=True, encoding="utf-8",
-                cwd="D:/AI/claude_code/claude-obsidian",
+                cwd=str(REPO_ROOT),
             )
             assert result.returncode == 0
             assert "[OK] Index rebuilt" in result.stdout
@@ -913,7 +1012,7 @@ class TestCLI:
             result = subprocess.run(
                 [
                     sys.executable,
-                    "skills/obsidian/obsidian_writer.py",
+                    str(SCRIPT_PATH),
                     "--type", "topic",
                     "--title", "RAG",
                     "--fields", '{"主题说明": "overview"}',
@@ -924,7 +1023,7 @@ class TestCLI:
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
-                cwd="D:/AI/claude_code/claude-obsidian",
+                cwd=str(REPO_ROOT),
             )
             assert result.returncode == 0
             assert "[INGEST PREVIEW]" in result.stdout
@@ -938,7 +1037,7 @@ class TestCLI:
             result = subprocess.run(
                 [
                     sys.executable,
-                    "skills/obsidian/obsidian_writer.py",
+                    str(SCRIPT_PATH),
                     "--type", "topic",
                     "--title", "RAG",
                     "--fields", '{"主题说明": "overview", "当前结论": "retrieval improves grounding"}',
@@ -948,7 +1047,7 @@ class TestCLI:
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
-                cwd="D:/AI/claude_code/claude-obsidian",
+                cwd=str(REPO_ROOT),
             )
             assert result.returncode == 0
             assert "[OK] Written:" in result.stdout
@@ -965,7 +1064,7 @@ class TestCLI:
             result = subprocess.run(
                 [
                     sys.executable,
-                    "skills/obsidian/obsidian_writer.py",
+                    str(SCRIPT_PATH),
                     "--type", "merge-candidates",
                     "--title", "Attention Survey",
                     "--vault", tmp,
@@ -973,18 +1072,20 @@ class TestCLI:
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
-                cwd="D:/AI/claude_code/claude-obsidian",
+                cwd=str(REPO_ROOT),
             )
             assert result.returncode == 0
             assert "[Merge candidates]" in result.stdout
             assert "Attention Is All You Need" in result.stdout
+            assert "[Feedback hint]" in result.stdout
+            assert "--suggestion-type merge" in result.stdout
 
     def test_write_mode_supports_post_write_source_updates(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = subprocess.run(
                 [
                     sys.executable,
-                    "skills/obsidian/obsidian_writer.py",
+                    str(SCRIPT_PATH),
                     "--type", "topic",
                     "--title", "RAG",
                     "--fields", '{"主题说明": "overview", "当前结论": "retrieval improves grounding"}',
@@ -996,7 +1097,7 @@ class TestCLI:
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
-                cwd="D:/AI/claude_code/claude-obsidian",
+                cwd=str(REPO_ROOT),
             )
             assert result.returncode == 0
             note_text = (Path(tmp) / "03-Knowledge/Topics/Topic - RAG.md").read_text(encoding="utf-8")
@@ -1017,7 +1118,7 @@ class TestCLI:
             result = subprocess.run(
                 [
                     sys.executable,
-                    "skills/obsidian/obsidian_writer.py",
+                    str(SCRIPT_PATH),
                     "--type", "merge-update",
                     "--target", "03-Knowledge/Literature/Literature - Attention Is All You Need.md",
                     "--fields", '{"核心观点": "new synthesis", "方法要点": "new method"}',
@@ -1028,7 +1129,7 @@ class TestCLI:
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
-                cwd="D:/AI/claude_code/claude-obsidian",
+                cwd=str(REPO_ROOT),
             )
             assert result.returncode == 0
             text = target.read_text(encoding="utf-8")
@@ -1053,7 +1154,7 @@ class TestCLI:
             result = subprocess.run(
                 [
                     sys.executable,
-                    "skills/obsidian/obsidian_writer.py",
+                    str(SCRIPT_PATH),
                     "--type", "cascade-candidates",
                     "--target", "03-Knowledge/Literature/Literature - Attention Survey.md",
                     "--vault", tmp,
@@ -1061,11 +1162,13 @@ class TestCLI:
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
-                cwd="D:/AI/claude_code/claude-obsidian",
+                cwd=str(REPO_ROOT),
             )
             assert result.returncode == 0
             assert "[Cascade candidates]" in result.stdout
             assert "Topic - Attention Mechanism" in result.stdout
+            assert "[Feedback hint]" in result.stdout
+            assert "--suggestion-type cascade" in result.stdout
 
     def test_cascade_update_mode_updates_topic_and_logs_cascade(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1079,7 +1182,7 @@ class TestCLI:
             result = subprocess.run(
                 [
                     sys.executable,
-                    "skills/obsidian/obsidian_writer.py",
+                    str(SCRIPT_PATH),
                     "--type", "cascade-update",
                     "--target", "03-Knowledge/Topics/Topic - Attention Mechanism.md",
                     "--fields", '{"当前结论": "new conclusion", "重要资料": "[[Literature - Attention Survey]]"}',
@@ -1089,7 +1192,7 @@ class TestCLI:
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
-                cwd="D:/AI/claude_code/claude-obsidian",
+                cwd=str(REPO_ROOT),
             )
             assert result.returncode == 0
             text = target.read_text(encoding="utf-8")
@@ -1109,7 +1212,7 @@ class TestCLI:
             result = subprocess.run(
                 [
                     sys.executable,
-                    "skills/obsidian/obsidian_writer.py",
+                    str(SCRIPT_PATH),
                     "--type", "cascade-update",
                     "--target", "03-Knowledge/Topics/Topic - Attention Mechanism.md",
                     "--fields", '{"核心机制": "should fail"}',
@@ -1118,7 +1221,7 @@ class TestCLI:
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
-                cwd="D:/AI/claude_code/claude-obsidian",
+                cwd=str(REPO_ROOT),
             )
             assert result.returncode != 0
             assert "cascade-update only supports topic fields" in result.stderr
@@ -1132,7 +1235,7 @@ class TestCLI:
             result = subprocess.run(
                 [
                     sys.executable,
-                    "skills/obsidian/obsidian_writer.py",
+                    str(SCRIPT_PATH),
                     "--type", "conflict-update",
                     "--target", "03-Knowledge/Topics/Topic - Attention Mechanism.md",
                     "--fields", '{"claim": "New benchmark reverses the old conclusion."}',
@@ -1143,7 +1246,7 @@ class TestCLI:
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
-                cwd="D:/AI/claude_code/claude-obsidian",
+                cwd=str(REPO_ROOT),
             )
             assert result.returncode == 0
             text = target.read_text(encoding="utf-8")
@@ -1163,7 +1266,7 @@ class TestCLI:
             result = subprocess.run(
                 [
                     sys.executable,
-                    "skills/obsidian/obsidian_writer.py",
+                    str(SCRIPT_PATH),
                     "--type", "conflict-update",
                     "--target", "03-Knowledge/Topics/Topic - Attention Mechanism.md",
                     "--fields", '{}',
@@ -1174,10 +1277,41 @@ class TestCLI:
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
-                cwd="D:/AI/claude_code/claude-obsidian",
+                cwd=str(REPO_ROOT),
             )
             assert result.returncode != 0
             assert "conflict-update requires fields.claim" in result.stderr
+
+    def test_suggestion_feedback_mode_writes_event_and_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_PATH),
+                    "--type", "suggestion-feedback",
+                    "--vault", tmp,
+                    "--suggestion-type", "link",
+                    "--feedback-action", "modify-accept",
+                    "--source-note", "Literature - Attention Survey",
+                    "--targets", "Topic - Attention,MOC - Transformers",
+                    "--reason", "linked to narrower topic instead",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                cwd=str(REPO_ROOT),
+            )
+            assert result.returncode == 0
+            assert "Suggestion feedback recorded" in result.stdout
+            events = [
+                json.loads(line)
+                for line in (Path(tmp) / _EVENTS_FILE).read_text(encoding="utf-8").splitlines()
+            ]
+            assert events[0]["action"] == "modify-accept"
+            assert events[0]["suggestion_type"] == "link"
+            assert events[0]["target_notes"] == ["Topic - Attention", "MOC - Transformers"]
+            log_text = (Path(tmp) / _LOG_FILE).read_text(encoding="utf-8")
+            assert "suggestion-feedback | Literature - Attention Survey" in log_text
 
     def test_ingest_sync_mode_runs_full_update_plan(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1207,7 +1341,7 @@ class TestCLI:
             result = subprocess.run(
                 [
                     sys.executable,
-                    "skills/obsidian/obsidian_writer.py",
+                    str(SCRIPT_PATH),
                     "--type", "ingest-sync",
                     "--target", "03-Knowledge/Literature/Literature - Attention Survey.md",
                     "--fields", plan,
@@ -1216,7 +1350,7 @@ class TestCLI:
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
-                cwd="D:/AI/claude_code/claude-obsidian",
+                cwd=str(REPO_ROOT),
             )
             assert result.returncode == 0
             assert "[OK] Ingest sync applied" in result.stdout
@@ -1231,7 +1365,7 @@ class TestCLI:
             result = subprocess.run(
                 [
                     sys.executable,
-                    "skills/obsidian/obsidian_writer.py",
+                    str(SCRIPT_PATH),
                     "--type", "literature",
                     "--title", "Bitrate Control Survey",
                     "--fields", '{"核心观点": "x", "方法要点": "y"}',
@@ -1241,11 +1375,13 @@ class TestCLI:
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
-                cwd="D:/AI/claude_code/claude-obsidian",
+                cwd=str(REPO_ROOT),
             )
             assert result.returncode == 0
             assert "[Topic suggestion]" in result.stdout
             assert "Topic - Bitrate Control" in result.stdout
+            assert "[Feedback hint]" in result.stdout
+            assert "--suggestion-type topic" in result.stdout
 
     def test_write_mode_skips_topic_suggestion_when_topic_match_exists(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1258,7 +1394,7 @@ class TestCLI:
             result = subprocess.run(
                 [
                     sys.executable,
-                    "skills/obsidian/obsidian_writer.py",
+                    str(SCRIPT_PATH),
                     "--type", "literature",
                     "--title", "Attention Survey",
                     "--fields", '{"核心观点": "x", "方法要点": "y"}',
@@ -1268,18 +1404,20 @@ class TestCLI:
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
-                cwd="D:/AI/claude_code/claude-obsidian",
+                cwd=str(REPO_ROOT),
             )
             assert result.returncode == 0
             assert "[Link suggestions]" in result.stdout
             assert "[Topic suggestion]" not in result.stdout
+            assert "[Feedback hint]" in result.stdout
+            assert "--suggestion-type link" in result.stdout
 
     def test_write_mode_does_not_suggest_topic_for_topic_note_itself(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = subprocess.run(
                 [
                     sys.executable,
-                    "skills/obsidian/obsidian_writer.py",
+                    str(SCRIPT_PATH),
                     "--type", "topic",
                     "--title", "RAG",
                     "--fields", '{"涓婚璇存槑": "overview", "褰撳墠缁撹": "retrieval improves grounding"}',
@@ -1289,7 +1427,7 @@ class TestCLI:
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
-                cwd="D:/AI/claude_code/claude-obsidian",
+                cwd=str(REPO_ROOT),
             )
             assert result.returncode == 0
             assert "[Topic suggestion]" not in result.stdout
@@ -1299,7 +1437,7 @@ class TestCLI:
             result = subprocess.run(
                 [
                     sys.executable,
-                    "skills/obsidian/obsidian_writer.py",
+                    str(SCRIPT_PATH),
                     "--type", "fleeting",
                     "--fields", '{"content": "测试想法", "tags": "#test"}',
                     "--vault", tmp,
@@ -1308,7 +1446,7 @@ class TestCLI:
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
-                cwd="D:/AI/claude_code/claude-obsidian",
+                cwd=str(REPO_ROOT),
             )
             assert result.returncode == 0
             assert "[DRY RUN]" in result.stdout
@@ -1319,7 +1457,7 @@ class TestCLI:
             result = subprocess.run(
                 [
                     sys.executable,
-                    "skills/obsidian/obsidian_writer.py",
+                    str(SCRIPT_PATH),
                     "--type", "fleeting",
                     "--fields", '{}',
                     "--vault", tmp,
@@ -1327,7 +1465,7 @@ class TestCLI:
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
-                cwd="D:/AI/claude_code/claude-obsidian",
+                cwd=str(REPO_ROOT),
             )
             assert result.returncode != 0
 
@@ -1402,7 +1540,7 @@ class TestIngestPreviewCLI:
     def _run(self, tmp, extra_args=None):
         cmd = [
             sys.executable,
-            "skills/obsidian/obsidian_writer.py",
+            str(SCRIPT_PATH),
             "--type", "literature",
             "--title", "Test Paper",
             "--fields", '{"核心观点": "key finding", "方法要点": "method detail"}',
@@ -1415,7 +1553,7 @@ class TestIngestPreviewCLI:
         return subprocess.run(
             cmd,
             capture_output=True, text=True, encoding="utf-8",
-            cwd="D:/AI/claude_code/claude-obsidian",
+            cwd=str(REPO_ROOT),
         )
 
     def test_create_action_shown_for_new_note(self):
@@ -1450,6 +1588,8 @@ class TestIngestPreviewCLI:
             assert result.returncode == 0
             # suggest_new_topic should still fire
             assert "[Topic suggestion]" in result.stdout
+            assert "[Feedback hint]" in result.stdout
+            assert "--suggestion-type topic" in result.stdout
 
     def test_link_suggestions_shown_when_matching_topic_exists(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1462,3 +1602,5 @@ class TestIngestPreviewCLI:
             result = self._run(tmp)
             assert result.returncode == 0
             assert "[Link suggestions]" in result.stdout
+            assert "[Feedback hint]" in result.stdout
+            assert "--suggestion-type link" in result.stdout

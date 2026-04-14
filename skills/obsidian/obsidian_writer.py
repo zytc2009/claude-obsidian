@@ -499,6 +499,47 @@ def _suggestion_keywords_from_stem(stem: str) -> list:
     return keywords
 
 
+def _load_feedback_adjustments(
+    vault: Path, suggestion_type: str, source_note: str
+) -> dict[str, dict[str, int]]:
+    """Return per-target feedback counts for a given source note and suggestion type."""
+    events_path = vault / _EVENTS_FILE
+    if not events_path.exists():
+        return {}
+
+    adjustments: dict[str, dict[str, int]] = {}
+    try:
+        with events_path.open(encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("event_type") != "suggestion_feedback":
+                    continue
+                if event.get("suggestion_type") != suggestion_type:
+                    continue
+                if event.get("source_note") != source_note:
+                    continue
+                action = event.get("action")
+                if action not in {"reject", "modify-accept"}:
+                    continue
+                for target in event.get("target_notes", []):
+                    target_name = str(target).strip()
+                    if not target_name:
+                        continue
+                    target_adjustments = adjustments.setdefault(
+                        target_name, {"reject": 0, "modify-accept": 0}
+                    )
+                    target_adjustments[action] += 1
+    except OSError:
+        return {}
+    return adjustments
+
+
 def suggest_links(vault: Path, new_note_path: Path) -> list:
     """Return MOC/Topic files that likely should link to the new note.
 
@@ -512,6 +553,7 @@ def suggest_links(vault: Path, new_note_path: Path) -> list:
     if not words:
         return []
 
+    feedback_adjustments = _load_feedback_adjustments(vault, "link", stem)
     candidates = []
     search_plan = [
         ("03-Knowledge/Topics", 2, "# 相关项目" if new_note_path.stem.startswith("Project - ") else "# 重要资料"),
@@ -539,7 +581,10 @@ def suggest_links(vault: Path, new_note_path: Path) -> list:
             body_words = [w for w in words if w.lower() in body_text]
             title_matches = len(title_words)
             body_matches = len(body_words)
-            score = base_score + title_matches * 2 + body_matches
+            raw_score = base_score + title_matches * 2 + body_matches
+            penalty_meta = feedback_adjustments.get(md_file.stem, {})
+            penalty = penalty_meta.get("reject", 0) * 3 + penalty_meta.get("modify-accept", 0)
+            score = raw_score - penalty
             if score <= base_score:
                 continue
             strength = "high" if base_score == 2 else "medium"
@@ -548,6 +593,12 @@ def suggest_links(vault: Path, new_note_path: Path) -> list:
                 reason_parts.append(f"title={', '.join(title_words[:3])}")
             if body_words:
                 reason_parts.append(f"body={', '.join(body_words[:3])}")
+            if penalty_meta.get("reject", 0):
+                reason_parts.append(f"feedback=rejectx{penalty_meta['reject']}")
+            if penalty_meta.get("modify-accept", 0):
+                reason_parts.append(
+                    f"feedback=modify-acceptx{penalty_meta['modify-accept']}"
+                )
             reason = "; ".join(reason_parts)
             candidates.append((score, md_file.relative_to(vault), f"{section}; {reason}"))
 
@@ -654,6 +705,10 @@ def _section_diff_summary(existing_path: Path, new_content: str) -> str:
 
 _INDEX_FILE = "_index.md"
 _LOG_FILE = "_log.md"
+_LOG_ARCHIVE_FILE = "_log.archive.md"
+_CORRECTIONS_FILE = "_corrections.jsonl"
+_EVENTS_FILE = "_events.jsonl"
+_MAX_LOG_ENTRIES = 500
 
 _INDEX_DIRS = [
     ("02-Projects", "Projects"),
@@ -694,6 +749,138 @@ def _ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
 
+def _split_log_entries(text: str) -> tuple[str, list[str]]:
+    """Split a markdown log file into header text and individual entries."""
+    marker = "\n## ["
+    if marker not in text:
+        return text.rstrip("\n"), []
+    start = text.index(marker)
+    header = text[:start].rstrip("\n")
+    body = text[start + 1 :]
+    raw_entries = body.split(marker)
+    entries = []
+    for i, chunk in enumerate(raw_entries):
+        entry = chunk if i == 0 else f"## [{chunk}"
+        entries.append(entry.strip("\n"))
+    return header, [entry for entry in entries if entry]
+
+
+def _append_log_entries(log_path: Path, header: str, entries: list[str]) -> None:
+    """Write a markdown log file from a header and entry list."""
+    _ensure_parent(log_path)
+    text = header.rstrip("\n")
+    if entries:
+        text += "\n\n" + "\n\n".join(entry.strip("\n") for entry in entries) + "\n"
+    else:
+        text += "\n"
+    log_path.write_text(text, encoding="utf-8")
+
+
+def _rotate_operation_log(vault: Path) -> None:
+    """Rotate older operation-log entries into an archive file."""
+    log_path = vault / _LOG_FILE
+    if not log_path.exists():
+        return
+
+    header, entries = _split_log_entries(
+        log_path.read_text(encoding="utf-8", errors="replace")
+    )
+    if len(entries) <= _MAX_LOG_ENTRIES:
+        return
+
+    archive_path = vault / _LOG_ARCHIVE_FILE
+    overflow = entries[:-_MAX_LOG_ENTRIES]
+    kept = entries[-_MAX_LOG_ENTRIES:]
+
+    if archive_path.exists():
+        archive_header, archive_entries = _split_log_entries(
+            archive_path.read_text(encoding="utf-8", errors="replace")
+        )
+    else:
+        archive_header, archive_entries = ("# Vault Operation Log Archive", [])
+
+    archive_entries.extend(overflow)
+    _append_log_entries(archive_path, archive_header, archive_entries)
+    _append_log_entries(log_path, header or "# Vault Operation Log", kept)
+
+
+def append_correction_events(vault: Path, events: list[dict]) -> Path | None:
+    """Append lint findings as JSONL correction events."""
+    if not events:
+        return None
+
+    corrections_path = vault / _CORRECTIONS_FILE
+    _ensure_parent(corrections_path)
+    with corrections_path.open("a", encoding="utf-8") as f:
+        for event in events:
+            f.write(json.dumps(event, ensure_ascii=False) + "\n")
+    return corrections_path
+
+
+def append_jsonl_events(path: Path, events: list[dict]) -> Path | None:
+    """Append structured events to a JSONL file."""
+    if not events:
+        return None
+
+    _ensure_parent(path)
+    with path.open("a", encoding="utf-8") as f:
+        for event in events:
+            f.write(json.dumps(event, ensure_ascii=False) + "\n")
+    return path
+
+
+def append_suggestion_feedback(
+    vault: Path,
+    suggestion_type: str,
+    action: str,
+    source_note: str,
+    target_notes: list[str],
+    reason: str = "",
+) -> Path:
+    """Append a structured suggestion-feedback event and mirror it to the log."""
+    event = {
+        "ts": datetime.now().isoformat(timespec="seconds"),
+        "event_type": "suggestion_feedback",
+        "suggestion_type": suggestion_type,
+        "source_note": source_note,
+        "target_notes": target_notes,
+        "action": action,
+        "reason": reason,
+    }
+    events_path = vault / _EVENTS_FILE
+    append_jsonl_events(events_path, [event])
+
+    details = [
+        f"Suggestion type: {suggestion_type}",
+        f"Action: {action}",
+        f"Targets: {', '.join(target_notes) if target_notes else '(none)'}",
+    ]
+    if reason:
+        details.append(f"Reason: {reason}")
+    append_operation_log(vault, "suggestion-feedback", source_note, details)
+    return events_path
+
+
+def _print_feedback_hint(
+    source_note: str, suggestion_type: str, targets: list[str], reason: str = ""
+) -> None:
+    """Print a copyable feedback command hint for suggestion-producing flows."""
+    if not source_note or not suggestion_type:
+        return
+
+    joined_targets = ",".join(targets)
+    print("\n[Feedback hint]")
+    print("  Record a rejection or modified acceptance with:")
+    print(
+        "  python skills/obsidian/obsidian_writer.py "
+        f"--type suggestion-feedback --source-note \"{source_note}\" "
+        f"--suggestion-type {suggestion_type} --feedback-action reject "
+        f"--targets \"{joined_targets}\""
+    )
+    if reason:
+        print(f"  Reason: {reason}")
+
+
 def append_operation_log(
     vault: Path,
     operation: str,
@@ -715,6 +902,7 @@ def append_operation_log(
 
     with log_path.open("a", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
+    _rotate_operation_log(vault)
     return log_path
 
 
@@ -1184,6 +1372,7 @@ def lint_vault(vault: Path, auto_fix: bool = False) -> None:
     inbox_backlog: list[str] = []
     skeletons: list[str] = []
     stale: list[str] = []
+    correction_events: list[dict] = []
 
     # Build set of all referenced note stems across all files
     referenced: set = set()
@@ -1191,10 +1380,34 @@ def lint_vault(vault: Path, auto_fix: bool = False) -> None:
         for link in _extract_wikilinks(text):
             referenced.add(link)
 
+    def add_correction(note_path: Path, issue_type: str, detail: str) -> None:
+        correction_events.append(
+            {
+                "ts": datetime.now().isoformat(timespec="seconds"),
+                "note": str(note_path.relative_to(vault)),
+                "issue_type": issue_type,
+                "detail": detail,
+                "detected_by": "lint",
+                "resolved": False,
+            }
+        )
+
     for note_path, text in contents.items():
         rel = note_path.relative_to(vault)
         top_dir = rel.parts[0] if rel.parts else ""
         fm = _parse_frontmatter(text)
+
+        if text.startswith("---"):
+            missing_frontmatter = [
+                key for key in ("status", "created", "updated", "reviewed")
+                if key not in fm
+            ]
+            if missing_frontmatter:
+                add_correction(
+                    note_path,
+                    "missing-frontmatter",
+                    f"missing field(s): {', '.join(missing_frontmatter)}",
+                )
 
         # --- Auto-fix: missing frontmatter fields ---
         if auto_fix and text.startswith("---"):
@@ -1211,6 +1424,7 @@ def lint_vault(vault: Path, auto_fix: bool = False) -> None:
         ]
         for lnk in broken_here:
             broken.append(f"  {rel} → [[{lnk}]]")
+            add_correction(note_path, "broken-link", f"[[{lnk}]]")
 
         if top_dir in _SKIP_LINT_DIRS:
             continue
@@ -1218,6 +1432,7 @@ def lint_vault(vault: Path, auto_fix: bool = False) -> None:
         # --- Orphan notes (Knowledge + Projects, not referenced anywhere) ---
         if top_dir in _KNOWLEDGE_DIRS and note_path.stem not in referenced:
             orphans.append(f"  {rel}")
+            add_correction(note_path, "orphan", "not referenced from any note")
 
         # --- Inbox backlog ---
         if top_dir == "00-Inbox":
@@ -1227,6 +1442,7 @@ def lint_vault(vault: Path, auto_fix: bool = False) -> None:
                     age = (today - date.fromisoformat(created_str)).days
                     if age > _INBOX_BACKLOG_DAYS:
                         inbox_backlog.append(f"  {rel} ({age} days old)")
+                        add_correction(note_path, "inbox-backlog", f"{age} days old")
                 except ValueError:
                     pass
 
@@ -1238,6 +1454,11 @@ def lint_vault(vault: Path, auto_fix: bool = False) -> None:
             skeletons.append(
                 f"  {rel} ({empty_count}/{section_count} sections empty)"
             )
+            add_correction(
+                note_path,
+                "skeleton",
+                f"{empty_count}/{section_count} sections empty",
+            )
 
         # --- Stale notes (active, not updated in 90+ days) ---
         if fm.get("status") == "active":
@@ -1247,6 +1468,7 @@ def lint_vault(vault: Path, auto_fix: bool = False) -> None:
                     age = (today - date.fromisoformat(updated_str)).days
                     if age > _STALE_DAYS:
                         stale.append(f"  {rel} ({age} days since update)")
+                        add_correction(note_path, "stale", f"{age} days since update")
                 except ValueError:
                     pass
 
@@ -1279,21 +1501,22 @@ def lint_vault(vault: Path, auto_fix: bool = False) -> None:
     if not found_issues and not auto_fixes:
         print("✓ No issues found.")
 
+    corrections_path = append_correction_events(vault, correction_events)
 
     issue_count = sum(len(items) for _, items in sections)
-    append_operation_log(
-        vault,
-        "lint",
-        details=[
-            f"Broken links: {len(broken)}",
-            f"Orphans: {len(orphans)}",
-            f"Inbox backlog: {len(inbox_backlog)}",
-            f"Skeleton notes: {len(skeletons)}",
-            f"Stale notes: {len(stale)}",
-            f"Auto-fixed: {len(auto_fixes)}",
-            f"Issues found: {issue_count}",
-        ],
-    )
+    log_details = [
+        f"Broken links: {len(broken)}",
+        f"Orphans: {len(orphans)}",
+        f"Inbox backlog: {len(inbox_backlog)}",
+        f"Skeleton notes: {len(skeletons)}",
+        f"Stale notes: {len(stale)}",
+        f"Auto-fixed: {len(auto_fixes)}",
+        f"Issues found: {issue_count}",
+        f"Corrections recorded: {len(correction_events)}",
+    ]
+    if corrections_path is not None:
+        log_details.append(f"Corrections file: {corrections_path.relative_to(vault)}")
+    append_operation_log(vault, "lint", details=log_details)
 
 
 # ---------------------------------------------------------------------------
@@ -1307,7 +1530,7 @@ def parse_args(argv=None):
     parser.add_argument(
         "--type",
         required=True,
-        choices=list(NOTE_CONFIG.keys()) + ["fleeting", "init", "lint", "index", "merge-candidates", "merge-update", "cascade-candidates", "cascade-update", "conflict-update", "ingest-sync"],
+        choices=list(NOTE_CONFIG.keys()) + ["fleeting", "init", "lint", "index", "merge-candidates", "merge-update", "cascade-candidates", "cascade-update", "conflict-update", "ingest-sync", "suggestion-feedback"],
         help="Note type",
     )
     parser.add_argument(
@@ -1340,6 +1563,26 @@ def parse_args(argv=None):
         "--status-label",
         default="unresolved",
         help="Conflict status label, default unresolved",
+    )
+    parser.add_argument(
+        "--suggestion-type",
+        default="",
+        help="Suggestion kind for suggestion-feedback (link/merge/cascade/topic)",
+    )
+    parser.add_argument(
+        "--feedback-action",
+        default="",
+        help="Feedback action for suggestion-feedback (reject/modify-accept)",
+    )
+    parser.add_argument(
+        "--reason",
+        default="",
+        help="Optional reason for suggestion-feedback",
+    )
+    parser.add_argument(
+        "--targets",
+        default="",
+        help="Comma-separated target notes for suggestion-feedback",
     )
     parser.add_argument(
         "--fields",
@@ -1407,6 +1650,12 @@ def main(argv=None):
         print("[Merge candidates]")
         for candidate in candidates:
             print(f"  -> {candidate.relative_to(vault)}")
+        _print_feedback_hint(
+            source_note=NOTE_CONFIG["literature"]["prefix"] + f" - {title}",
+            suggestion_type="merge",
+            targets=[str(candidate.relative_to(vault)) for candidate in candidates[:3]],
+            reason="Use if you reject these merge candidates or pick a narrower target.",
+        )
         return
 
     if note_type == "cascade-candidates":
@@ -1427,6 +1676,12 @@ def main(argv=None):
         print("[Cascade candidates]")
         for candidate, reason in candidates:
             print(f"  -> {candidate.relative_to(vault)} ({reason})")
+        _print_feedback_hint(
+            source_note=source_path.stem,
+            suggestion_type="cascade",
+            targets=[str(candidate.relative_to(vault)) for candidate, _ in candidates[:3]],
+            reason="Use if you reject these cascade targets or manually update a different topic.",
+        )
         return
 
     if note_type == "merge-update":
@@ -1581,6 +1836,46 @@ def main(argv=None):
                     print(f"     {item}")
         return
 
+    if note_type == "suggestion-feedback":
+        suggestion_type = args.suggestion_type.strip().lower()
+        action = args.feedback_action.strip().lower()
+        source_note = args.source_note.strip()
+        if not suggestion_type:
+            print("Error: --suggestion-type is required for suggestion-feedback", file=sys.stderr)
+            sys.exit(1)
+        if suggestion_type not in {"link", "merge", "cascade", "topic"}:
+            print("Error: --suggestion-type must be one of: link, merge, cascade, topic", file=sys.stderr)
+            sys.exit(1)
+        if action not in {"reject", "modify-accept"}:
+            print("Error: --feedback-action must be one of: reject, modify-accept", file=sys.stderr)
+            sys.exit(1)
+        if not source_note:
+            print("Error: --source-note is required for suggestion-feedback", file=sys.stderr)
+            sys.exit(1)
+
+        target_notes = [item.strip() for item in args.targets.split(",") if item.strip()]
+        if not target_notes and isinstance(fields.get("target_notes"), list):
+            target_notes = [str(item).strip() for item in fields["target_notes"] if str(item).strip()]
+        reason = args.reason.strip() or str(fields.get("reason", "")).strip()
+
+        events_path = append_suggestion_feedback(
+            vault,
+            suggestion_type=suggestion_type,
+            action=action,
+            source_note=source_note,
+            target_notes=target_notes,
+            reason=reason,
+        )
+        print(f"[OK] Suggestion feedback recorded: {events_path.relative_to(vault)}")
+        print(f"  Type   : {suggestion_type}")
+        print(f"  Action : {action}")
+        print(f"  Source : {source_note}")
+        if target_notes:
+            print(f"  Targets: {', '.join(target_notes)}")
+        if reason:
+            print(f"  Reason : {reason}")
+        return
+
     # --- Fleeting: special case ---
     if note_type == "fleeting":
         content = fields.get("content", "").strip()
@@ -1629,9 +1924,22 @@ def main(argv=None):
             print("[Link suggestions]")
             for rel, section in suggestions:
                 print(f"  → {rel}  ({section}  ← add [[{planned_path.stem}]])")
+            _print_feedback_hint(
+                source_note=planned_path.stem,
+                suggestion_type="link",
+                targets=[str(rel) for rel, _ in suggestions],
+                reason="Use if you reject these link suggestions or choose a narrower target.",
+            )
         new_topic_hint = suggest_new_topic(planned_path, suggestions)
         if new_topic_hint:
             print(f"\n[Topic suggestion]\n  {new_topic_hint}")
+            topic_name = new_topic_hint.removeprefix("Consider creating: ").strip()
+            _print_feedback_hint(
+                source_note=planned_path.stem,
+                suggestion_type="topic",
+                targets=[topic_name] if topic_name else [],
+                reason="Use if you reject this topic suggestion or create a different topic instead.",
+            )
         return
 
     filepath = write_note(
@@ -1661,11 +1969,24 @@ def main(argv=None):
         print("\n[Link suggestions]")
         for rel, section in suggestions:
             print(f"  → {rel}  ({section}  ← add [[{filepath.stem}]])")
+        _print_feedback_hint(
+            source_note=filepath.stem,
+            suggestion_type="link",
+            targets=[str(rel) for rel, _ in suggestions],
+            reason="Use if you reject these link suggestions or choose a narrower target.",
+        )
 
     new_topic_hint = suggest_new_topic(filepath, suggestions)
     if new_topic_hint:
         print("\n[Topic suggestion]")
         print(f"  {new_topic_hint}")
+        topic_name = new_topic_hint.removeprefix("Consider creating: ").strip()
+        _print_feedback_hint(
+            source_note=filepath.stem,
+            suggestion_type="topic",
+            targets=[topic_name] if topic_name else [],
+            reason="Use if you reject this topic suggestion or create a different topic instead.",
+        )
 
 
 if __name__ == "__main__":
