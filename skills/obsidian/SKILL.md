@@ -131,10 +131,22 @@ python ~/.claude/scripts/obsidian_writer.py \
   --draft false
 ```
 
-### Step C6: 关联建议
+### Step C6: 关联建议与 topic 归属
 
 脚本输出 `[Link suggestions]`，询问是否自动添加链接。
 如果用户确认，用 Read + Edit 工具将 `[[新笔记名]]` 添加到建议的区块末尾。
+
+**Topic 归属检查（必做）：**
+
+- 如果 `[Link suggestions]` 里有 topic 命中（路径包含 `Topics/`）→ 询问是否把 `[[新笔记名]]` 加到该 topic 的 `## 重要资料` 区块
+- 如果没有 topic 命中，且脚本输出了 `[Topic suggestion]` → **主动追问用户**：
+
+  > "这篇笔记暂时没有归属的主题页。建议新建：`<proposed topic name>`
+  > [1] 现在新建这个主题页
+  > [2] 关联到其他已有主题（请告诉我主题名）
+  > [3] 暂不归属（会在下次 lint 中标记为孤儿）"
+
+  等用户选择后执行，不要跳过此步骤。
 
 ---
 
@@ -311,6 +323,18 @@ python ~/.claude/scripts/obsidian_writer.py \
   --draft false
 ```
 
+### Step L5: Topic 归属检查（必做）
+
+脚本输出 `[Link suggestions]` 和可能的 `[Topic suggestion]`。
+
+- 如果有 topic 命中 → 询问是否关联
+- 如果没有 topic 命中 → **主动追问**：
+
+  > "这篇笔记暂时没有归属的主题页。建议新建：`<proposed topic name>`
+  > [1] 现在新建这个主题页
+  > [2] 关联到其他已有主题（请告诉我主题名）
+  > [3] 暂不归属（会在下次 lint 中标记为孤儿）"
+
 ---
 
 ## MODE: organize — 搜索、合并、归档
@@ -411,13 +435,23 @@ python ~/.claude/scripts/obsidian_writer.py \
   --draft <true|false>
 ```
 
-### Step W5: 关联建议
+### Step W5: 关联建议与 topic 归属
 
 脚本会自动输出 `[Link suggestions]`，优先展示可能归属的 `topic`，其次才是 `MOC`。
 建议中可能带有 `strength=...`、`title=...`、`body=...`，用于说明推荐原因。
-这些建议的主要作用是帮助用户发现主题归属，而不是盲目自动加链接。
-如果没有强 `topic` 匹配，脚本还可能输出 `[Topic suggestion]`，提示用户考虑新建一个主题页。
-如果用户确认，用 Read + Edit 工具将 `[[新笔记名]]` 添加到建议的区块末尾。
+如果用户确认关联，用 Read + Edit 工具将 `[[新笔记名]]` 添加到建议的区块末尾。
+
+**Topic 归属检查（必做）：**
+
+- 如果 `[Link suggestions]` 里有 topic 命中 → 询问是否把 `[[新笔记名]]` 加到该 topic 的 `## 重要资料` 区块
+- 如果没有 topic 命中，且脚本输出了 `[Topic suggestion]` → **主动追问用户**：
+
+  > "这篇笔记暂时没有归属的主题页。建议新建：`<proposed topic name>`
+  > [1] 现在新建这个主题页
+  > [2] 关联到其他已有主题（请告诉我主题名）
+  > [3] 暂不归属（会在下次 lint 中标记为孤儿）"
+
+  等用户选择后执行，不要跳过此步骤。
 
 ---
 
@@ -435,32 +469,56 @@ python ~/.claude/scripts/obsidian_writer.py --type init
 
 ## MODE: query — 知识库问答
 
-**Goal:** 搜索 vault 中的已有笔记回答用户问题，每个论点附引用来源，可选归档答案。
+**Goal:** 两段式检索——先从 topic 综述给出简答，用户需要细节时再 drill down 到 literature。
 
-### Step Q1: 搜索相关笔记
+### Step Q1: Tier 1 — 搜索 topic 综述
 
-用 Grep 工具在以下位置搜索用户问题中的关键词：
-- `$OBSIDIAN_VAULT_PATH/03-Knowledge/**/*.md`
-- `$OBSIDIAN_VAULT_PATH/02-Projects/**/*.md`
-
-搜索标题和正文，列出匹配文件。
-
-### Step Q2: 读取笔记内容
-
-用 Read 工具读取匹配笔记的相关段落（优先读 `核心观点`、`当前结论`、`一句话定义` 区块）。
-
-### Step Q3: 综合回答
-
-基于找到的内容回答，每个论点标注来源：
-
+只在 topic 笔记里搜索：
 ```
-Transformer 的核心是自注意力机制 — [[Concept - Self-Attention]]
-在实际部署中 KV Cache 是主要瓶颈 — [[Literature - LLM Inference Optimization]]
+$OBSIDIAN_VAULT_PATH/03-Knowledge/Topics/**/*.md
 ```
 
-如果 vault 中没有相关内容，明确告知："你的笔记里暂无关于 X 的内容。"
+用 Grep 匹配用户问题中的关键词，命中后只用 Read 读取每篇 topic 的以下区块：
+- `## 主题说明`
+- `## 当前结论`
+- `## 未解决问题`
 
-### Step Q4: 可选归档
+基于这些字段给出简答，每个论点标注来源 topic：
+
+```
+RAG 的核心价值是降低幻觉率，同时不需要重新训练模型 — [[Topic - RAG]]
+当前主流方案是 dense retrieval + reranker — [[Topic - RAG]]
+```
+
+**如果 Tier 1 有命中，先输出简答，然后询问用户：**
+> "需要看原始资料吗？（说"展开"或"细节"进入详细模式）"
+
+**如果 Tier 1 无命中，直接进入 Tier 2。**
+
+### Step Q2: Tier 2 — drill down（按需）
+
+当用户说"展开"、"细节"、"给我原文"、"原始资料"时，或 Tier 1 无命中时，扩大搜索范围：
+```
+$OBSIDIAN_VAULT_PATH/03-Knowledge/**/*.md
+$OBSIDIAN_VAULT_PATH/02-Projects/**/*.md
+```
+
+读取匹配笔记的内容（优先 `核心观点`、`方法要点`、`一句话定义` 区块）。
+
+把结果按所属 topic 分组展示（通过 `## 重要资料` 字段或 backlinks 判断归属）：
+
+```
+Topic: [[Topic - RAG]]
+  [[Literature - Retrieval-Augmented Generation (2020)]] — dense retrieval 原论文，召回精度数据
+  [[Literature - REALM]]                                — 预训练阶段加入检索的方案
+
+未归属片段（考虑整理到主题页）：
+  [[Literature - ColBERT v2]] — 无关联 topic，出现关键词匹配
+```
+
+如果 Tier 1 和 Tier 2 都无命中，明确告知："你的笔记里暂无关于 X 的内容。"
+
+### Step Q3: 可选归档
 
 如果用户说"存下来"、"保存这个回答"：
 
