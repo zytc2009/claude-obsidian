@@ -1382,6 +1382,7 @@ def _fix_frontmatter(text: str, path: Path, fm: dict) -> tuple:
 
 _INBOX_BACKLOG_DAYS = 7
 _STALE_DAYS = 90
+_STALE_SYNTHESIS_DAYS = 30   # topic synthesis lag threshold relative to linked literature
 _SKELETON_RATIO = 0.5   # fraction of _待补充_ sections that triggers "skeleton"
 
 _SKIP_LINT_DIRS = {"01-DailyNotes", "04-Archive"}
@@ -1406,6 +1407,7 @@ def lint_vault(vault: Path, auto_fix: bool = False) -> None:
     broken: list[str] = []
     orphans: list[str] = []
     inbox_backlog: list[str] = []
+    stale_synthesis: list[str] = []
     skeletons: list[str] = []
     stale: list[str] = []
     correction_events: list[dict] = []
@@ -1510,6 +1512,51 @@ def lint_vault(vault: Path, auto_fix: bool = False) -> None:
                 except ValueError:
                     pass
 
+    # --- Stale synthesis: topic updated lag behind linked literature ---
+    topic_dir = vault / "03-Knowledge" / "Topics"
+    if topic_dir.exists():
+        for topic_path, topic_text in contents.items():
+            if topic_path.parent != topic_dir:
+                continue
+            topic_fm = _parse_frontmatter(topic_text)
+            topic_updated_str = topic_fm.get("updated", "")
+            if not topic_updated_str:
+                continue
+            try:
+                topic_updated = date.fromisoformat(topic_updated_str)
+            except ValueError:
+                continue
+
+            # Find linked literature notes via wikilinks in the topic body
+            linked_stems = _extract_wikilinks(topic_text)
+            lagging: list[str] = []
+            for stem in linked_stems:
+                # Look up the actual file for this stem
+                linked_file = next(
+                    (f for f in all_notes if f.stem == stem), None
+                )
+                if linked_file is None:
+                    continue
+                linked_fm = _parse_frontmatter(contents.get(linked_file, ""))
+                linked_updated_str = linked_fm.get("updated", "")
+                if not linked_updated_str:
+                    continue
+                try:
+                    linked_updated = date.fromisoformat(linked_updated_str)
+                except ValueError:
+                    continue
+                lag = (linked_updated - topic_updated).days
+                if lag > _STALE_SYNTHESIS_DAYS:
+                    lagging.append(f"{stem} (+{lag}d)")
+
+            if lagging:
+                rel = topic_path.relative_to(vault)
+                detail = f"linked notes updated after topic: {', '.join(lagging[:3])}"
+                stale_synthesis.append(
+                    f"  {rel} — {detail}"
+                )
+                add_correction(topic_path, "stale-synthesis", detail)
+
     # --- Print report ---
     total = len(all_notes)
     print(f"[Lint] Scanned {total} note(s) in {vault}\n")
@@ -1526,6 +1573,7 @@ def lint_vault(vault: Path, auto_fix: bool = False) -> None:
         ("[Inbox backlog] (stuck >7 days)", inbox_backlog),
         ("[Skeleton notes] (>50% fields empty)", skeletons),
         ("[Stale notes] (not updated in 90+ days)", stale),
+        (f"[Stale synthesis] (topic synthesis lags linked notes by >{_STALE_SYNTHESIS_DAYS}d)", stale_synthesis),
     ]
     found_issues = False
     for header, items in sections:
@@ -1548,6 +1596,7 @@ def lint_vault(vault: Path, auto_fix: bool = False) -> None:
         f"Inbox backlog: {len(inbox_backlog)}",
         f"Skeleton notes: {len(skeletons)}",
         f"Stale notes: {len(stale)}",
+        f"Stale synthesis: {len(stale_synthesis)}",
         f"Auto-fixed: {len(auto_fixes)}",
         f"Issues found: {issue_count}",
         f"Corrections recorded: {len(correction_events)}",

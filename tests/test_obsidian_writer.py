@@ -759,6 +759,49 @@ class TestLintVault:
                 )
                 assert not auto_fixed, "auto-fixed fields must not appear as unresolved corrections"
 
+    def test_detects_stale_synthesis(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self._make_vault(tmp)
+            (vault / "03-Knowledge/Topics").mkdir(parents=True, exist_ok=True)
+            (vault / "03-Knowledge/Literature").mkdir(parents=True, exist_ok=True)
+
+            topic = vault / "03-Knowledge/Topics/Topic - RAG.md"
+            literature = vault / "03-Knowledge/Literature/Literature - RAG Paper.md"
+
+            self._write(topic, (
+                "---\ntype: topic\nupdated: 2026-01-01\n---\n"
+                "# 重要资料\n[[Literature - RAG Paper]]\n"
+            ))
+            self._write(literature, "---\ntype: literature\nupdated: 2026-03-15\n---\ncontent\n")
+
+            lint_vault(vault)
+            events = [
+                json.loads(line)
+                for line in (vault / _CORRECTIONS_FILE).read_text(encoding="utf-8").splitlines()
+            ]
+            assert any(e["issue_type"] == "stale-synthesis" for e in events)
+
+    def test_no_stale_synthesis_when_topic_is_current(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self._make_vault(tmp)
+            (vault / "03-Knowledge/Topics").mkdir(parents=True, exist_ok=True)
+            (vault / "03-Knowledge/Literature").mkdir(parents=True, exist_ok=True)
+
+            topic = vault / "03-Knowledge/Topics/Topic - RAG.md"
+            literature = vault / "03-Knowledge/Literature/Literature - RAG Paper.md"
+
+            self._write(topic, (
+                "---\ntype: topic\nupdated: 2026-03-20\n---\n"
+                "# 重要资料\n[[Literature - RAG Paper]]\n"
+            ))
+            self._write(literature, "---\ntype: literature\nupdated: 2026-03-15\n---\ncontent\n")
+
+            lint_vault(vault)
+            corrections_path = vault / _CORRECTIONS_FILE
+            if corrections_path.exists():
+                events = [json.loads(l) for l in corrections_path.read_text(encoding="utf-8").splitlines()]
+                assert not any(e["issue_type"] == "stale-synthesis" for e in events)
+
     def test_cli_lint_runs_successfully(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = subprocess.run(
