@@ -99,6 +99,11 @@ obsidian_writer.py                - 模板渲染，文件读写（无 LLM 调用
 在我笔记里查一下 Transformer 的局限性
 ```
 
+检索分两层：
+
+- **第一层（默认）：** 仅扫描 `topic` 笔记，从 `主题说明`、`当前结论`、`未解决问题` 字段组织回答，每个论点附来源引用。
+- **第二层（按需）：** 无 topic 匹配时，或你说"展开"/"细节"时，返回按所属 topic 分组的 literature / project 笔记命中。没有 topic 父节点的孤儿命中单独列出，让碎片化在每次查询时可见。
+
 回答中每个论点标注来源：`答案内容 - [[Concept - Self-Attention]]`。
 
 ### `lint` - 知识库健康检查
@@ -117,7 +122,10 @@ obsidian_writer.py                - 模板渲染，文件读写（无 LLM 调用
 | Inbox 积压 | `00-Inbox` 中超过 7 天的笔记 | 报告 |
 | 空壳笔记 | 超过 50% 字段仍是 `_placeholder_` | 报告 |
 | 陈旧笔记 | 活跃笔记 90 天以上未更新 | 报告 |
+| 综述滞后 | Topic 笔记的 linked literature 在 topic 最后更新 30 天后仍有新增 | 报告 |
 | 缺失 frontmatter | 缺少 `status`/`created`/`updated` | 加 `--auto-fix` 自动修复 |
+
+检测到的问题会追加到 `_corrections.jsonl` 中（`resolved: false`），作为机器可读的修正事件流。
 
 示例输出：
 ```
@@ -133,6 +141,32 @@ obsidian_writer.py                - 模板渲染，文件读写（无 LLM 调用
 [Inbox backlog] (1)
 ⚠ 00-Inbox/Literature - Some Draft.md (11 days old)
 ```
+
+### `topic-scout` - 聚类孤儿笔记，推荐 topic
+
+扫描 `00-Inbox/` 和 `03-Knowledge/` 中没有 topic 父节点的笔记，按共享词汇聚类，提出 topic 建议候选。
+
+```
+/obsidian topic-scout
+```
+
+示例输出：
+
+```
+[Topic Scout] Scanned 6 orphan note(s)
+
+Found 2 cluster(s) — consider creating a topic for each:
+
+Cluster 1 (3 notes) → suggested: Topic - Harness Engineering
+  [[Literature - Harness Engineering 最佳实践]]
+  [[Literature - Harness Engineering与Agents编排]]
+  [[Literature - 一文读懂Harness Engineering]]
+
+Singletons (1 note(s) with no close match):
+  [[Literature - RAG Survey 2024]]
+```
+
+你选择哪些聚类要落地为 topic 笔记。按需运行，不自动执行。
 
 ### `index` - 重建知识库索引
 
@@ -169,6 +203,19 @@ D:/obsidian/
 │   └── Topics/
 └── 04-Archive/
 ```
+
+## 可观测性
+
+vault 根目录维护两个机器可读事件流：
+
+| 文件 | 用途 |
+|------|------|
+| `_corrections.jsonl` | `lint` 发现的质量问题——断链、孤立笔记、综述滞后等。每行：`{ts, note, issue_type, detail, detected_by, resolved}` |
+| `_events.jsonl` | 显式推荐反馈（reject / modify-accept）。每行：`{ts, event_type, suggestion_type, source_note, target_notes, action, reason}` |
+
+`_log.md` 是人可读的操作日志。超过 500 条后，旧条目自动轮转到 `_log.archive.md`。
+
+链接推荐会读取 `_events.jsonl`，对同一 source note 下被拒绝过的 target 进行降权。词法匹配仍是主要排名信号。
 
 ## 笔记类型
 
@@ -278,7 +325,7 @@ python -m pytest
 python -m pytest --cov=scripts
 ```
 
-测试覆盖所有笔记类型、闪念追加逻辑、草稿路由、文件名冲突处理、lint 检查、链接建议、索引生成和 CLI（80 个测试）。
+测试覆盖所有笔记类型、闪念追加逻辑、草稿路由、文件名冲突处理、lint 检查、链接建议、索引生成、可观测性事件流、孤儿追踪、topic-scout 聚类、综述滞后检测和 CLI（137 个测试）。
 
 ## 文件命名
 

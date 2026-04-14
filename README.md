@@ -100,6 +100,11 @@ Search existing notes and answer questions with citations. Optionally archive th
 在我笔记里查一下 Transformer 的局限性
 ```
 
+Retrieval is two-tier:
+
+- **Tier 1 (default):** scan only `topic` notes; compose the answer from `主题说明`, `当前结论`, `未解决问题` with per-claim citations.
+- **Tier 2 (on request):** if no topic matches, or when you ask "展开" / "细节", surface literature and project hits grouped under their parent topic. Orphan hits (notes with no topic parent) are reported in a separate section so fragmentation is visible on every query.
+
 Each claim in the answer is cited back to its source note: `answer text — [[Concept - Self-Attention]]`.
 
 ### `lint` — Vault health check
@@ -118,7 +123,10 @@ Scan the vault for quality issues and optionally auto-fix simple ones.
 | Inbox backlog | Notes stuck in `00-Inbox` for more than 7 days | Reported |
 | Skeleton notes | Notes with more than 50% `_placeholder_` fields | Reported |
 | Stale notes | Active notes not updated in 90+ days | Reported |
+| Stale synthesis | Topic notes whose linked literature was updated 30+ days after the topic | Reported |
 | Missing frontmatter | Notes lacking `status`/`created`/`updated` | Auto-fixed with `--auto-fix` |
+
+Detected issues are appended to `_corrections.jsonl` as machine-readable correction events (`resolved: false`). When you fix an issue manually, the next lint run will not re-emit it.
 
 Example output:
 ```
@@ -135,6 +143,32 @@ Example output:
 ⚠ 00-Inbox/Literature - Some Draft.md (11 days old)
 ```
 
+### `topic-scout` — Cluster orphan notes and propose topics
+
+Scan `00-Inbox/` and `03-Knowledge/` for notes without a topic parent, cluster them by shared vocabulary, and propose topic candidates.
+
+```
+/obsidian topic-scout
+```
+
+Example output:
+
+```
+[Topic Scout] Scanned 6 orphan note(s)
+
+Found 2 cluster(s) — consider creating a topic for each:
+
+Cluster 1 (3 notes) → suggested: Topic - Harness Engineering
+  [[Literature - Harness Engineering 最佳実践]]
+  [[Literature - Harness Engineering与Agents编排]]
+  [[Literature - 一文读懂Harness Engineering]]
+
+Singletons (1 note(s) with no close match):
+  [[Literature - RAG Survey 2024]]
+```
+
+User picks which clusters to materialize as topic notes. Runs on demand, not automatically.
+
 ### `index` — Rebuild knowledge index
 
 Rebuild `_index.md` at the vault root — a global navigation page listing all notes by section with summaries and dates. New notes are added to the index automatically after every `write` or `capture`.
@@ -142,6 +176,22 @@ Rebuild `_index.md` at the vault root — a global navigation page listing all n
 ```
 /obsidian index
 ```
+
+### `suggestion-feedback` — Record suggestion feedback
+
+Record an explicit rejection or modified acceptance of a link/topic/merge/cascade suggestion. This feeds into future link-suggestion ranking without touching note content.
+
+```bash
+python skills/obsidian/obsidian_writer.py \
+  --type suggestion-feedback \
+  --source-note "Literature - RAG Survey" \
+  --suggestion-type link \
+  --feedback-action reject \
+  --targets "03-Knowledge/Topics/Topic - LLM.md" \
+  --reason "wrong topic, RAG is not an LLM concern"
+```
+
+Events are stored in `_events.jsonl`. Supported `--feedback-action` values: `reject`, `modify-accept`.
 
 ### `merge-candidates` — Find likely merge targets
 
@@ -262,6 +312,19 @@ D:/obsidian/
 │   └── Topics/
 └── 04-Archive/
 ```
+
+## Observability
+
+Two machine-readable event streams are maintained at the vault root:
+
+| File | Purpose |
+|------|---------|
+| `_corrections.jsonl` | Quality issues found by `lint` — broken links, orphan notes, stale synthesis, etc. Each line: `{ts, note, issue_type, detail, detected_by, resolved}` |
+| `_events.jsonl` | Explicit suggestion feedback (reject / modify-accept). Each line: `{ts, event_type, suggestion_type, source_note, target_notes, action, reason}` |
+
+`_log.md` is the human-readable activity log. When it exceeds 500 entries, older entries rotate into `_log.archive.md`.
+
+Link suggestions consult `_events.jsonl` to down-rank previously rejected targets (per source note). The lexical matching heuristic remains the primary ranking signal.
 
 ## Note Types
 
@@ -401,6 +464,17 @@ python skills/obsidian/obsidian_writer.py \
   --target "03-Knowledge/Literature/Literature - Attention Survey.md" \
   --fields '{"primary_fields":{"核心观点":"..."},"source_note":"Literature - New Benchmark","source_ref":"OpenAI, 2026-04-13","cascade_updates":[{"target":"03-Knowledge/Topics/Topic - Attention Mechanism.md","fields":{"当前结论":"..."}}],"conflicts":[{"target":"03-Knowledge/Topics/Topic - Attention Mechanism.md","claim":"New benchmark reverses the old conclusion.","conflicts_with":"[[Literature - FlashAttention Survey]]"}]}'
 
+# Cluster orphan notes and propose topic candidates
+python skills/obsidian/obsidian_writer.py --type topic-scout
+
+# Record a rejected link suggestion
+python skills/obsidian/obsidian_writer.py \
+  --type suggestion-feedback \
+  --source-note "Literature - RAG Survey" \
+  --suggestion-type link \
+  --feedback-action reject \
+  --targets "03-Knowledge/Topics/Topic - LLM.md"
+
 # Dry-run: preview without writing
 python skills/obsidian/obsidian_writer.py --type topic --title "RAG" \
   --fields '{}' --dry-run
@@ -416,7 +490,7 @@ python -m pytest
 python -m pytest --cov=scripts
 ```
 
-The test suite covers all note types, fleeting append logic, draft routing, filename collision handling, lint checks, link suggestions, index generation, and the CLI (80 tests).
+The test suite covers all note types, fleeting append logic, draft routing, filename collision handling, lint checks, link suggestions, index generation, observability streams, orphan-on-create tracking, topic-scout clustering, stale-synthesis detection, and the CLI (137 tests).
 
 ## File naming
 
