@@ -642,6 +642,185 @@ def _topic_candidate_from_stem(stem: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Topic scout
+# ---------------------------------------------------------------------------
+
+_SCOUT_STOP_WORDS = {
+    # English
+    "the", "and", "for", "with", "from", "that", "this", "into", "over",
+    "under", "about", "have", "been", "were", "will", "does", "their",
+    "using", "based", "more", "less", "also", "when", "where", "what",
+    "how", "why", "can", "its", "are", "not", "but", "has", "had",
+    # Type prefixes (not useful for clustering)
+    "literature", "concept", "topic", "project", "moc",
+    # Generic note words
+    "notes", "note", "draft", "article", "paper", "blog", "survey",
+    "overview", "guide", "tutorial", "summary",
+}
+
+_SCOUT_SCAN_DIRS = {"00-Inbox", "03-Knowledge"}
+_SCOUT_SKIP_SUBDIRS = {"Topics"}   # topics are the target, not candidates
+_SCOUT_MIN_CLUSTER = 2
+_SCOUT_SIMILARITY_THRESHOLD = 0.15
+_SCOUT_TOP_WORDS = 4   # words in suggested topic name
+
+
+def _scout_keywords(stem: str, fm: dict, body: str) -> set[str]:
+    """Extract a keyword set for clustering from stem, tags, and body."""
+    tokens: list[str] = []
+
+    # From stem (strip type prefix)
+    parts = re.split(r"[\s\-_]+", stem)
+    tokens.extend(parts)
+
+    # From frontmatter tags
+    tags = fm.get("tags", [])
+    if isinstance(tags, str):
+        tags = [tags]
+    for tag in tags:
+        tokens.extend(re.split(r"[\s\-_/]+", str(tag)))
+
+    # From first 500 chars of body
+    tokens.extend(re.split(r"\W+", body[:500]))
+
+    # Normalize and filter
+    seen: set[str] = set()
+    result: set[str] = set()
+    for t in tokens:
+        t = t.lower().strip()
+        if len(t) < 3:
+            continue
+        if t in _SCOUT_STOP_WORDS:
+            continue
+        if re.fullmatch(r"\d+", t):
+            continue
+        if t not in seen:
+            seen.add(t)
+            result.add(t)
+    return result
+
+
+def _jaccard(a: set, b: set) -> float:
+    """Jaccard similarity between two sets."""
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def _cluster_notes(
+    notes: list[tuple[Path, set[str]]],
+    threshold: float = _SCOUT_SIMILARITY_THRESHOLD,
+) -> list[list[tuple[Path, set[str]]]]:
+    """Greedy single-linkage clustering by Jaccard keyword overlap."""
+    clusters: list[list[tuple[Path, set[str]]]] = []
+    assigned: set[int] = set()
+
+    for i, (path_i, kw_i) in enumerate(notes):
+        if i in assigned:
+            continue
+        cluster = [(path_i, kw_i)]
+        assigned.add(i)
+        # Expand: any unassigned note with similarity > threshold to any cluster member
+        changed = True
+        while changed:
+            changed = False
+            for j, (path_j, kw_j) in enumerate(notes):
+                if j in assigned:
+                    continue
+                if any(_jaccard(kw_j, kw_m) >= threshold for _, kw_m in cluster):
+                    cluster.append((path_j, kw_j))
+                    assigned.add(j)
+                    changed = True
+        clusters.append(cluster)
+
+    return clusters
+
+
+def _suggest_cluster_name(cluster: list[tuple[Path, set[str]]]) -> str:
+    """Pick a topic name from the most frequent cross-cluster keywords."""
+    freq: dict[str, int] = {}
+    for _, keywords in cluster:
+        for kw in keywords:
+            freq[kw] = freq.get(kw, 0) + 1
+    # Only words appearing in >1 note are strong cluster signals
+    shared = {w: c for w, c in freq.items() if c > 1}
+    if not shared:
+        shared = freq
+    top = sorted(shared, key=lambda w: -shared[w])[:_SCOUT_TOP_WORDS]
+    return " ".join(w.capitalize() for w in top) if top else "Unknown"
+
+
+def scout_topics(
+    vault: Path,
+    min_cluster_size: int = _SCOUT_MIN_CLUSTER,
+    threshold: float = _SCOUT_SIMILARITY_THRESHOLD,
+) -> None:
+    """Find orphan notes and cluster them into proposed topic groups."""
+    # Step 1: find stems already linked from any topic
+    topic_dir = vault / "03-Knowledge" / "Topics"
+    parented: set[str] = set()
+    if topic_dir.exists():
+        for topic_file in topic_dir.glob("*.md"):
+            text = topic_file.read_text(encoding="utf-8", errors="replace")
+            for link in _extract_wikilinks(text):
+                parented.add(link)
+
+    # Step 2: collect candidate notes (not in Topics, not already parented)
+    candidates: list[tuple[Path, set[str]]] = []
+    for scan_dir_name in _SCOUT_SCAN_DIRS:
+        scan_dir = vault / scan_dir_name
+        if not scan_dir.exists():
+            continue
+        for note_file in scan_dir.rglob("*.md"):
+            # Skip if inside a Topics subdir
+            rel_parts = note_file.relative_to(vault).parts
+            if any(p in _SCOUT_SKIP_SUBDIRS for p in rel_parts):
+                continue
+            if note_file.stem in parented:
+                continue
+            try:
+                text = note_file.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            fm = _parse_frontmatter(text)
+            # Strip frontmatter from body
+            body = re.sub(r"^---.*?---\s*", "", text, count=1, flags=re.DOTALL)
+            keywords = _scout_keywords(note_file.stem, fm, body)
+            candidates.append((note_file, keywords))
+
+    if not candidates:
+        print("✓ No orphan notes found — all notes have a topic parent.")
+        return
+
+    # Step 3: cluster
+    all_clusters = _cluster_notes(candidates, threshold=threshold)
+    clusters = [c for c in all_clusters if len(c) >= min_cluster_size]
+    singletons = [c[0] for c in all_clusters if len(c) < min_cluster_size]
+
+    print(f"[Topic Scout] Scanned {len(candidates)} orphan note(s)\n")
+
+    if clusters:
+        print(f"Found {len(clusters)} cluster(s) — consider creating a topic for each:\n")
+        for idx, cluster in enumerate(clusters, 1):
+            name = _suggest_cluster_name(cluster)
+            print(f"Cluster {idx} ({len(cluster)} notes) → suggested: Topic - {name}")
+            for note_path, _ in cluster:
+                rel = note_path.relative_to(vault)
+                print(f"  [[{note_path.stem}]]  ({rel})")
+            print()
+
+    if singletons:
+        print(f"Singletons ({len(singletons)} note(s) with no close match):")
+        for note_path, _ in singletons:
+            rel = note_path.relative_to(vault)
+            print(f"  [[{note_path.stem}]]  ({rel})")
+        print()
+
+    if not clusters and not singletons:
+        print("✓ No orphan notes found.")
+
+
+# ---------------------------------------------------------------------------
 # Ingest preview helpers
 # ---------------------------------------------------------------------------
 
@@ -1617,7 +1796,7 @@ def parse_args(argv=None):
     parser.add_argument(
         "--type",
         required=True,
-        choices=list(NOTE_CONFIG.keys()) + ["fleeting", "init", "lint", "index", "merge-candidates", "merge-update", "cascade-candidates", "cascade-update", "conflict-update", "ingest-sync", "suggestion-feedback"],
+        choices=list(NOTE_CONFIG.keys()) + ["fleeting", "init", "lint", "index", "merge-candidates", "merge-update", "cascade-candidates", "cascade-update", "conflict-update", "ingest-sync", "suggestion-feedback", "topic-scout"],
         help="Note type",
     )
     parser.add_argument(
@@ -1717,6 +1896,11 @@ def main(argv=None):
     # --- Lint: special case ---
     if note_type == "lint":
         lint_vault(vault, auto_fix=args.auto_fix)
+        return
+
+    # --- Topic scout ---
+    if note_type == "topic-scout":
+        scout_topics(vault)
         return
 
     # --- Index: special case ---

@@ -17,6 +17,7 @@ You are managing the user's local Obsidian vault. The default path is `~/obsidia
 | 检查知识库, lint, vault 健康检查, 断链, 孤立笔记 | `lint` |
 | 在笔记里查, 知识库搜索, query, 我笔记里有关…的内容 | `query` |
 | 重建索引, 更新 index, 生成目录, rebuild index | `index` |
+| 找孤儿笔记, 聚类整理, 批量建主题, topic scout | `topic-scout` |
 
 If still unclear, ask: "你想做什么？fleeting（速记）/ capture（抓取网页/文件）/ log（整理对话）/ organize（归档整理）/ write（写笔记）/ query（知识库问答）/ lint（健康检查）/ init（初始化目录）"
 
@@ -576,6 +577,28 @@ python ~/.claude/scripts/obsidian_writer.py --type index
 ```
 
 直接展示脚本输出。索引文件位于 vault 根目录的 `_index.md`。
+
+---
+
+## MODE: topic-scout — 孤儿笔记聚类
+
+**Goal:** 扫描 `00-Inbox/` 和 `03-Knowledge/`（不含 `Topics/`），找出所有没有 topic 父节点的笔记，按词汇相似度聚类，提出建议 topic。
+
+```bash
+python ~/.claude/scripts/obsidian_writer.py --type topic-scout
+```
+
+脚本输出：
+- 每个 cluster 的建议 topic 名 + 成员笔记列表
+- 无法归入 cluster 的单独列出（Singletons）
+
+**当用户确认某个 cluster 时：**
+
+1. 取建议名作为标题（用户可修改）
+2. 调用 `write` 模式新建 topic 笔记，`重要资料` 预填 cluster 成员的 `[[wikilink]]` 列表
+3. 可选：在每篇 cluster 成员笔记里反向添加 `[[Topic - 新名]]` 链接（询问用户后执行）
+
+**运行频率：** 按需触发，不自动运行。建议在 `lint` 发现大量孤儿后手动跑。
 
 ---
 

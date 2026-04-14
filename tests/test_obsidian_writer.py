@@ -967,6 +967,74 @@ class TestOrphanOnCreate:
             assert not (vault / _CORRECTIONS_FILE).exists()
 
 
+class TestTopicScout:
+    def _make_vault(self, tmp: str) -> Path:
+        vault = Path(tmp)
+        for d in ["00-Inbox", "03-Knowledge/Literature", "03-Knowledge/Topics"]:
+            (vault / d).mkdir(parents=True, exist_ok=True)
+        return vault
+
+    def _write(self, path: Path, content: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+
+    def test_clusters_related_orphan_notes(self, capsys):
+        from skills.obsidian.obsidian_writer import scout_topics
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self._make_vault(tmp)
+            self._write(
+                vault / "03-Knowledge/Literature/Literature - KV Cache.md",
+                "---\ntype: literature\n---\nKV cache inference transformer attention memory\n",
+            )
+            self._write(
+                vault / "03-Knowledge/Literature/Literature - Speculative Decoding.md",
+                "---\ntype: literature\n---\nspeculative decoding inference transformer latency\n",
+            )
+            # Unrelated note — should end up as singleton
+            self._write(
+                vault / "03-Knowledge/Literature/Literature - Piano Chords.md",
+                "---\ntype: literature\n---\npiano chord music harmony scale\n",
+            )
+            scout_topics(vault)
+            out = capsys.readouterr().out
+            assert "Cluster" in out
+            assert "KV Cache" in out
+            assert "Speculative Decoding" in out
+
+    def test_excludes_parented_notes(self, capsys):
+        from skills.obsidian.obsidian_writer import scout_topics
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self._make_vault(tmp)
+            self._write(
+                vault / "03-Knowledge/Literature/Literature - KV Cache.md",
+                "---\ntype: literature\n---\ncontent\n",
+            )
+            # Topic already links to KV Cache → it should be excluded from scout
+            self._write(
+                vault / "03-Knowledge/Topics/Topic - Inference.md",
+                "---\ntype: topic\n---\n# 重要资料\n[[Literature - KV Cache]]\n",
+            )
+            scout_topics(vault)
+            out = capsys.readouterr().out
+            assert "KV Cache" not in out
+
+    def test_no_orphans_message_when_all_parented(self, capsys):
+        from skills.obsidian.obsidian_writer import scout_topics
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self._make_vault(tmp)
+            self._write(
+                vault / "03-Knowledge/Topics/Topic - Inference.md",
+                "---\ntype: topic\n---\n# 重要资料\n[[Literature - KV Cache]]\n",
+            )
+            self._write(
+                vault / "03-Knowledge/Literature/Literature - KV Cache.md",
+                "---\ntype: literature\n---\ncontent\n",
+            )
+            scout_topics(vault)
+            out = capsys.readouterr().out
+            assert "No orphan notes found" in out
+
+
 class TestFindMergeCandidates:
     def test_returns_matching_literature_notes(self):
         with tempfile.TemporaryDirectory() as tmp:
