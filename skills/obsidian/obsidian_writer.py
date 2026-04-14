@@ -661,58 +661,109 @@ _SCOUT_STOP_WORDS = {
 _SCOUT_SCAN_DIRS = {"00-Inbox", "03-Knowledge"}
 _SCOUT_SKIP_SUBDIRS = {"Topics"}   # topics are the target, not candidates
 _SCOUT_MIN_CLUSTER = 2
-_SCOUT_SIMILARITY_THRESHOLD = 0.15
+_SCOUT_SIMILARITY_THRESHOLD = 0.10   # lowered from 0.15 for better CJK/mixed recall
 _SCOUT_TOP_WORDS = 4   # words in suggested topic name
 
+# Chinese section header patterns that are note-template boilerplate
+_SCOUT_BOILERPLATE = {
+    "资料信息", "与已有知识的连接", "原文主要内容", "核心观点", "方法要点",
+    "存疑之处", "可转化概念", "验证实验", "知识连接", "细节",
+    "一句话定义", "解决什么问题", "核心机制", "关键公式或流程", "优点",
+    "局限", "适用场景", "常见误区", "我的理解", "相关链接",
+    "主题说明", "核心问题", "重要资料", "相关项目", "当前结论", "未解决问题",
+    "项目描述", "原因分析", "排查过程", "解决方案", "结果验证", "风险与遗留问题",
+}
 
-def _scout_keywords(stem: str, fm: dict, body: str) -> set[str]:
-    """Extract a keyword set for clustering from stem, tags, and body."""
-    tokens: list[str] = []
 
-    # From stem (strip type prefix)
-    parts = re.split(r"[\s\-_]+", stem)
-    tokens.extend(parts)
+def _split_mixed_tokens(text: str) -> list[str]:
+    """Split text on whitespace/punctuation and also at CJK↔ASCII boundaries."""
+    # First split on common separators
+    parts = re.split(r"[\s\-_：:与、，。！？（）()【】\[\]《》<>「」\|/\\]+", text)
+    result = []
+    for part in parts:
+        if not part:
+            continue
+        # Further split at CJK↔ASCII transition boundaries
+        sub = re.sub(r"([A-Za-z0-9])(?=[\u4e00-\u9fff])", r"\1 ", part)
+        sub = re.sub(r"([\u4e00-\u9fff])(?=[A-Za-z0-9])", r"\1 ", sub)
+        result.extend(sub.split())
+    return result
 
-    # From frontmatter tags
+
+def _normalize_token(t: str) -> str | None:
+    """Normalize a raw token; return None if it should be discarded."""
+    t = t.lower().strip()
+    if len(t) < 3:
+        return None
+    if t in _SCOUT_STOP_WORDS or t in _SCOUT_BOILERPLATE:
+        return None
+    if re.fullmatch(r"[\d\-:]+", t):
+        return None
+    return t
+
+
+def _scout_keywords(stem: str, fm: dict, body: str) -> dict[str, int]:
+    """Return a weighted keyword counter for clustering.
+
+    Stem/tag keywords get weight 3 (high signal); body keywords get weight 1.
+    Returns a dict[keyword → weight] used for weighted Jaccard similarity.
+    """
+    counter: dict[str, int] = {}
+
+    def add(tokens: list[str], weight: int) -> None:
+        for t in tokens:
+            t = _normalize_token(t)
+            if t:
+                counter[t] = max(counter.get(t, 0), weight)
+
+    # Stem — highest weight
+    add(_split_mixed_tokens(stem), weight=3)
+
+    # Frontmatter tags — high weight
     tags = fm.get("tags", [])
     if isinstance(tags, str):
         tags = [tags]
     for tag in tags:
-        tokens.extend(re.split(r"[\s\-_/]+", str(tag)))
+        add(_split_mixed_tokens(str(tag)), weight=3)
 
-    # From first 500 chars of body
-    tokens.extend(re.split(r"\W+", body[:500]))
+    # Body — strip heading lines and placeholders first
+    clean_body = re.sub(r"^#+\s.*$", "", body, flags=re.MULTILINE)
+    clean_body = clean_body.replace("_待补充_", "")
+    add(_split_mixed_tokens(clean_body[:500]), weight=1)
 
-    # Normalize and filter
-    seen: set[str] = set()
-    result: set[str] = set()
-    for t in tokens:
-        t = t.lower().strip()
-        if len(t) < 3:
-            continue
-        if t in _SCOUT_STOP_WORDS:
-            continue
-        if re.fullmatch(r"\d+", t):
-            continue
-        if t not in seen:
-            seen.add(t)
-            result.add(t)
-    return result
+    return counter
 
 
-def _jaccard(a: set, b: set) -> float:
-    """Jaccard similarity between two sets."""
+def _jaccard(a: dict[str, int], b: dict[str, int]) -> float:
+    """Weighted Jaccard similarity between two keyword counters.
+
+    Uses min(w_a, w_b) / max(w_a, w_b) summed over the union of keys.
+    """
     if not a or not b:
         return 0.0
-    return len(a & b) / len(a | b)
+    keys = set(a) | set(b)
+    numerator = sum(min(a.get(k, 0), b.get(k, 0)) for k in keys)
+    denominator = sum(max(a.get(k, 0), b.get(k, 0)) for k in keys)
+    return numerator / denominator if denominator else 0.0
+
+
+_SCOUT_STEM_THRESHOLD = 0.25   # stricter threshold for stem-only path
+
+def _stem_jaccard(a: dict[str, int], b: dict[str, int], min_weight: int = 3) -> float:
+    """Jaccard similarity using only high-weight (stem/tag) keywords."""
+    a_high = {k for k, v in a.items() if v >= min_weight}
+    b_high = {k for k, v in b.items() if v >= min_weight}
+    if not a_high or not b_high:
+        return 0.0
+    return len(a_high & b_high) / len(a_high | b_high)
 
 
 def _cluster_notes(
-    notes: list[tuple[Path, set[str]]],
+    notes: list[tuple[Path, dict[str, int]]],
     threshold: float = _SCOUT_SIMILARITY_THRESHOLD,
-) -> list[list[tuple[Path, set[str]]]]:
+) -> list[list[tuple[Path, dict[str, int]]]]:
     """Greedy single-linkage clustering by Jaccard keyword overlap."""
-    clusters: list[list[tuple[Path, set[str]]]] = []
+    clusters: list[list[tuple[Path, dict[str, int]]]] = []
     assigned: set[int] = set()
 
     for i, (path_i, kw_i) in enumerate(notes):
@@ -727,7 +778,11 @@ def _cluster_notes(
             for j, (path_j, kw_j) in enumerate(notes):
                 if j in assigned:
                     continue
-                if any(_jaccard(kw_j, kw_m) >= threshold for _, kw_m in cluster):
+                if any(
+                    _jaccard(kw_j, kw_m) >= threshold
+                    or _stem_jaccard(kw_j, kw_m) >= _SCOUT_STEM_THRESHOLD
+                    for _, kw_m in cluster
+                ):
                     cluster.append((path_j, kw_j))
                     assigned.add(j)
                     changed = True
@@ -736,17 +791,32 @@ def _cluster_notes(
     return clusters
 
 
-def _suggest_cluster_name(cluster: list[tuple[Path, set[str]]]) -> str:
-    """Pick a topic name from the most frequent cross-cluster keywords."""
-    freq: dict[str, int] = {}
-    for _, keywords in cluster:
-        for kw in keywords:
-            freq[kw] = freq.get(kw, 0) + 1
-    # Only words appearing in >1 note are strong cluster signals
-    shared = {w: c for w, c in freq.items() if c > 1}
-    if not shared:
-        shared = freq
-    top = sorted(shared, key=lambda w: -shared[w])[:_SCOUT_TOP_WORDS]
+def _suggest_cluster_name(cluster: list[tuple[Path, dict[str, int]]]) -> str:
+    """Pick a topic name from keywords shared across the most notes in the cluster.
+
+    Prefers stem-weight keywords (weight >= 3) appearing in ≥2 notes.
+    Falls back to any shared keyword if no high-weight ones qualify.
+    """
+    # Count in how many notes each keyword appears, weighted by max weight
+    note_count: dict[str, int] = {}
+    max_weight: dict[str, int] = {}
+    for _, counter in cluster:
+        for kw, w in counter.items():
+            note_count[kw] = note_count.get(kw, 0) + 1
+            max_weight[kw] = max(max_weight.get(kw, 0), w)
+
+    # Strong candidates: appear in ≥2 notes AND are stem-level keywords (weight ≥ 3)
+    strong = {w for w, c in note_count.items() if c >= 2 and max_weight[w] >= 3}
+    if not strong:
+        # Fallback: any keyword in ≥2 notes
+        strong = {w for w, c in note_count.items() if c >= 2}
+    if not strong:
+        strong = set(max_weight)
+
+    ranked = sorted(strong, key=lambda w: (-note_count[w], -max_weight[w]))
+    # Prefer pure-ASCII tokens for readability; fall back to mixed if needed
+    ascii_only = [w for w in ranked if re.fullmatch(r"[a-z0-9]+", w)]
+    top = (ascii_only or ranked)[:_SCOUT_TOP_WORDS]
     return " ".join(w.capitalize() for w in top) if top else "Unknown"
 
 
@@ -766,7 +836,7 @@ def scout_topics(
                 parented.add(link)
 
     # Step 2: collect candidate notes (not in Topics, not already parented)
-    candidates: list[tuple[Path, set[str]]] = []
+    candidates: list[tuple[Path, dict[str, int]]] = []
     for scan_dir_name in _SCOUT_SCAN_DIRS:
         scan_dir = vault / scan_dir_name
         if not scan_dir.exists():
@@ -1564,7 +1634,7 @@ _STALE_DAYS = 90
 _STALE_SYNTHESIS_DAYS = 30   # topic synthesis lag threshold relative to linked literature
 _SKELETON_RATIO = 0.5   # fraction of _待补充_ sections that triggers "skeleton"
 
-_SKIP_LINT_DIRS = {"01-DailyNotes", "04-Archive"}
+_SKIP_LINT_DIRS = {"01-DailyNotes", "04-Archive", "Templates", "Attachments"}
 _KNOWLEDGE_DIRS = {"02-Projects", "03-Knowledge"}
 
 
