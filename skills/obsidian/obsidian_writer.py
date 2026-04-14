@@ -868,13 +868,14 @@ def _print_feedback_hint(
     if not source_note or not suggestion_type:
         return
 
+    script = Path(__file__).resolve()
     joined_targets = ",".join(targets)
     print("\n[Feedback hint]")
     print("  Record a rejection or modified acceptance with:")
     print(
-        "  python skills/obsidian/obsidian_writer.py "
+        f"  python \"{script}\" "
         f"--type suggestion-feedback --source-note \"{source_note}\" "
-        f"--suggestion-type {suggestion_type} --feedback-action reject "
+        f"--suggestion-type {suggestion_type} --feedback-action reject|modify-accept "
         f"--targets \"{joined_targets}\""
     )
     if reason:
@@ -1397,6 +1398,16 @@ def lint_vault(vault: Path, auto_fix: bool = False) -> None:
         top_dir = rel.parts[0] if rel.parts else ""
         fm = _parse_frontmatter(text)
 
+        # --- Auto-fix: missing frontmatter fields ---
+        if auto_fix and text.startswith("---"):
+            new_text, fixes = _fix_frontmatter(text, note_path, fm)
+            if fixes:
+                note_path.write_text(new_text, encoding="utf-8")
+                contents[note_path] = new_text
+                text = new_text
+                fm = _parse_frontmatter(new_text)
+                auto_fixes.extend(fixes)
+
         if text.startswith("---"):
             missing_frontmatter = [
                 key for key in ("status", "created", "updated", "reviewed")
@@ -1408,14 +1419,6 @@ def lint_vault(vault: Path, auto_fix: bool = False) -> None:
                     "missing-frontmatter",
                     f"missing field(s): {', '.join(missing_frontmatter)}",
                 )
-
-        # --- Auto-fix: missing frontmatter fields ---
-        if auto_fix and text.startswith("---"):
-            new_text, fixes = _fix_frontmatter(text, note_path, fm)
-            if fixes:
-                note_path.write_text(new_text, encoding="utf-8")
-                contents[note_path] = new_text
-                auto_fixes.extend(fixes)
 
         # --- Broken wikilinks ---
         broken_here = [

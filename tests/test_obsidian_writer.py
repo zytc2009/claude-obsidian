@@ -740,6 +740,25 @@ class TestLintVault:
                 for event in events
             )
 
+    def test_auto_fix_does_not_emit_correction_for_fixed_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self._make_vault(tmp)
+            note = vault / "03-Knowledge/Concepts/Concept - NoStatus.md"
+            self._write(note, "---\ntype: concept\n---\n# content\n")
+            lint_vault(vault, auto_fix=True)
+            corrections_path = vault / _CORRECTIONS_FILE
+            if corrections_path.exists():
+                events = [
+                    json.loads(line)
+                    for line in corrections_path.read_text(encoding="utf-8").splitlines()
+                ]
+                auto_fixed = any(
+                    event["issue_type"] == "missing-frontmatter"
+                    and event["note"].endswith("Concept - NoStatus.md")
+                    for event in events
+                )
+                assert not auto_fixed, "auto-fixed fields must not appear as unresolved corrections"
+
     def test_cli_lint_runs_successfully(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = subprocess.run(
@@ -855,9 +874,9 @@ class TestSuggestLinks:
             )
 
             suggestions = suggest_links(vault, new_note)
-            paths = [str(path) for path, _ in suggestions]
+            paths = [Path(path).as_posix() for path, _ in suggestions]
             assert "03-Knowledge/MOCs/MOC - Attention.md" in paths[0]
-            assert all("Topic - Attention Mechanism" not in str(path) for path, _ in suggestions)
+            assert all("Topic - Attention Mechanism" not in Path(path).as_posix() for path, _ in suggestions)
 
 
 class TestFindMergeCandidates:
