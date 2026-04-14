@@ -879,6 +879,51 @@ class TestSuggestLinks:
             assert all("Topic - Attention Mechanism" not in Path(path).as_posix() for path, _ in suggestions)
 
 
+class TestOrphanOnCreate:
+    def _make_vault(self, tmp: str) -> Path:
+        vault = Path(tmp)
+        for d in ["03-Knowledge/Literature", "03-Knowledge/Topics", "03-Knowledge/MOCs"]:
+            (vault / d).mkdir(parents=True, exist_ok=True)
+        return vault
+
+    def _write(self, path: Path, content: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+
+    def test_emits_correction_when_no_topic_match(self):
+        from skills.obsidian.obsidian_writer import _maybe_emit_orphan_correction
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self._make_vault(tmp)
+            note = vault / "03-Knowledge/Literature/Literature - Test.md"
+            self._write(note, "---\ntype: literature\n---\ncontent\n")
+            # No suggestions (no topic match)
+            _maybe_emit_orphan_correction(vault, note, [], is_draft=False)
+            events = [
+                json.loads(line)
+                for line in (vault / _CORRECTIONS_FILE).read_text(encoding="utf-8").splitlines()
+            ]
+            assert any(e["issue_type"] == "orphan-on-create" for e in events)
+
+    def test_no_correction_when_topic_match_exists(self):
+        from skills.obsidian.obsidian_writer import _maybe_emit_orphan_correction
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self._make_vault(tmp)
+            note = vault / "03-Knowledge/Literature/Literature - Test.md"
+            self._write(note, "---\ntype: literature\n---\ncontent\n")
+            topic = Path("03-Knowledge/Topics/Topic - Something.md")
+            _maybe_emit_orphan_correction(vault, note, [(topic, "重要资料")], is_draft=False)
+            assert not (vault / _CORRECTIONS_FILE).exists()
+
+    def test_no_correction_for_draft(self):
+        from skills.obsidian.obsidian_writer import _maybe_emit_orphan_correction
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self._make_vault(tmp)
+            note = vault / "03-Knowledge/Literature/Literature - Test.md"
+            self._write(note, "---\ntype: literature\n---\ncontent\n")
+            _maybe_emit_orphan_correction(vault, note, [], is_draft=True)
+            assert not (vault / _CORRECTIONS_FILE).exists()
+
+
 class TestFindMergeCandidates:
     def test_returns_matching_literature_notes(self):
         with tempfile.TemporaryDirectory() as tmp:

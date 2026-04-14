@@ -861,6 +861,41 @@ def append_suggestion_feedback(
     return events_path
 
 
+def _maybe_emit_orphan_correction(
+    vault: Path,
+    filepath: Path,
+    suggestions: list,
+    is_draft: bool,
+) -> None:
+    """Emit an orphan-on-create correction if the note has no topic parent."""
+    if is_draft:
+        return
+    # Only apply to notes inside 03-Knowledge (not daily notes, inbox, archive)
+    try:
+        rel = filepath.relative_to(vault)
+    except ValueError:
+        return
+    if rel.parts[0] != "03-Knowledge":
+        return
+
+    has_topic = any("Topics" in str(rel) for rel, _ in suggestions)
+    if not has_topic:
+        append_correction_events(
+            vault,
+            [
+                {
+                    "ts": datetime.now().isoformat(timespec="seconds"),
+                    "note": str(rel),
+                    "issue_type": "orphan-on-create",
+                    "detail": "no topic parent at creation time",
+                    "detected_by": "write",
+                    "resolved": False,
+                }
+            ],
+        )
+        print("[Orphan warning] This note has no topic parent. Consider attaching it to a topic.")
+
+
 def _print_feedback_hint(
     source_note: str, suggestion_type: str, targets: list[str], reason: str = ""
 ) -> None:
@@ -1990,6 +2025,9 @@ def main(argv=None):
             targets=[topic_name] if topic_name else [],
             reason="Use if you reject this topic suggestion or create a different topic instead.",
         )
+
+    # Orphan-on-create: emit correction if no topic parent and note is in Knowledge
+    _maybe_emit_orphan_correction(vault, filepath, suggestions, is_draft)
 
 
 if __name__ == "__main__":
