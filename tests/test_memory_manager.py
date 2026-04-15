@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta
 from pathlib import Path
 import pytest
 from skills.obsidian.memory_manager import MemoryManager, _MEMORY_FILE
@@ -105,3 +106,41 @@ class TestLoadRobustness:
         mm = MemoryManager(vault)
         assert "Good" in mm._long_term
         assert len(mm._long_term) == 1
+
+
+class TestDecay:
+    def _make_entry(self, vault, word, score, decay_rate, days_ago):
+        mm = MemoryManager(vault)
+        last = (datetime.now() - timedelta(days=days_ago)).isoformat(timespec="seconds")
+        mm._long_term[word] = {
+            "word": word, "aliases": [], "activation_score": score,
+            "frequency": 1, "last_activated": last, "created": last,
+            "decay_rate": decay_rate, "obsidian_links": [],
+        }
+        return mm
+
+    def test_high_score_word_survives_7_days(self, vault):
+        mm = self._make_entry(vault, "Titans", 1.0, 0.05, 7)
+        mm.run_decay()
+        assert "Titans" in mm._long_term
+        assert mm._long_term["Titans"]["activation_score"] > 0.1
+
+    def test_low_freq_word_pruned_after_30_days(self, vault):
+        mm = self._make_entry(vault, "OldWord", 1.0, 0.15, 30)
+        mm.run_decay()
+        assert "OldWord" not in mm._long_term
+
+    def test_prune_keeps_top_n_by_score(self, vault):
+        mm = MemoryManager(vault)
+        now = datetime.now().isoformat(timespec="seconds")
+        for i in range(10):
+            mm._long_term[f"word{i}"] = {
+                "word": f"word{i}", "aliases": [],
+                "activation_score": i * 0.1, "frequency": 1,
+                "last_activated": now, "created": now,
+                "decay_rate": 0.01, "obsidian_links": [],
+            }
+        mm.prune(max_items=5)
+        assert len(mm._long_term) == 5
+        assert "word9" in mm._long_term
+        assert "word0" not in mm._long_term

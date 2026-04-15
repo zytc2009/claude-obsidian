@@ -98,3 +98,25 @@ class MemoryManager:
                 "obsidian_links": [obsidian_link] if obsidian_link else [],
             }
         self._long_term[word] = entry
+
+    def run_decay(self):
+        """更新所有词条的激活分数，淘汰低于阈值的词条。"""
+        updated = {}
+        for word, entry in self._long_term.items():
+            score = self._current_activation(entry)
+            if score >= _MIN_ACTIVATION_THRESHOLD:
+                entry = dict(entry)
+                entry["activation_score"] = round(score, 4)
+                updated[word] = entry
+        self._long_term = updated
+
+    def prune(self, max_items: int = _MAX_MEMORY_ITEMS):
+        """保留激活分数最高的 max_items 条词条。"""
+        if len(self._long_term) <= max_items:
+            return
+        sorted_entries = sorted(
+            self._long_term.values(),
+            key=lambda e: self._current_activation(e),
+            reverse=True,
+        )
+        self._long_term = {e["word"]: e for e in sorted_entries[:max_items]}
