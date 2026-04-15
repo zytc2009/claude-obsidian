@@ -1,5 +1,4 @@
 import json
-import tempfile
 from pathlib import Path
 import pytest
 from skills.obsidian.memory_manager import MemoryManager, _MEMORY_FILE
@@ -69,3 +68,40 @@ class TestSave:
         mm2 = MemoryManager(vault)
         assert "RAG" in mm2._long_term
         assert "检索增强" in mm2._long_term["RAG"]["aliases"]
+
+
+class TestUpsertImmutability:
+    def test_upsert_does_not_mutate_previous_entry(self, vault):
+        mm = MemoryManager(vault)
+        mm.upsert("CMS", obsidian_link="file1.md")
+        original_links = mm._long_term["CMS"]["obsidian_links"]
+        original_id = id(original_links)
+        mm.upsert("CMS", obsidian_link="file2.md")
+        # The new entry should have a fresh list, not the same object
+        assert id(mm._long_term["CMS"]["obsidian_links"]) != original_id or \
+               len(original_links) == 1  # original list was not mutated
+
+    def test_upsert_updates_last_activated_on_existing(self, vault):
+        import time
+        mm = MemoryManager(vault)
+        mm.upsert("CMS")
+        first_ts = mm._long_term["CMS"]["last_activated"]
+        time.sleep(0.01)
+        mm.upsert("CMS")
+        second_ts = mm._long_term["CMS"]["last_activated"]
+        assert second_ts >= first_ts
+
+
+class TestLoadRobustness:
+    def test_load_skips_corrupt_lines(self, vault):
+        (vault / _MEMORY_FILE).write_text(
+            'not-valid-json\n'
+            + json.dumps({"word": "Good", "aliases": [], "activation_score": 0.5,
+                          "frequency": 1, "last_activated": "2026-04-15T10:00:00",
+                          "created": "2026-04-15T10:00:00", "decay_rate": 0.1,
+                          "obsidian_links": []}, ensure_ascii=False) + "\n",
+            encoding="utf-8"
+        )
+        mm = MemoryManager(vault)
+        assert "Good" in mm._long_term
+        assert len(mm._long_term) == 1

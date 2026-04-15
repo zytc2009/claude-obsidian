@@ -28,7 +28,7 @@ def _extract_keywords(text: str) -> list:
     """从文本中提取关键词（名词、专有词，无 ML 依赖）。"""
     if not text:
         return []
-    wikilinks = re.findall(r'\[\[([^\]]+)\]\]', text)
+    wikilinks = [m.split('|')[0].strip() for m in re.findall(r'\[\[([^\]]+)\]\]', text)]
     tags = re.findall(r'#(\w+)', text)
     english = re.findall(r'\b[A-Z][a-zA-Z]{1,}\b', text)
     chinese = re.findall(r'[\u4e00-\u9fff]{2,4}', text)
@@ -52,7 +52,10 @@ class MemoryManager:
                 line = line.strip()
                 if not line:
                     continue
-                entry = json.loads(line)
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
                 self._long_term[entry["word"]] = entry
 
     def _save(self):
@@ -73,13 +76,15 @@ class MemoryManager:
         if word in self._long_term:
             entry = dict(self._long_term[word])
             entry["frequency"] += 1
+            entry["last_activated"] = datetime.now().isoformat(timespec="seconds")
             if aliases:
                 existing = set(entry.get("aliases", []))
                 entry["aliases"] = list(existing | set(aliases))
             if obsidian_link:
-                links = entry.setdefault("obsidian_links", [])
+                links = list(entry.get("obsidian_links", []))
                 if obsidian_link not in links:
                     links.append(obsidian_link)
+                entry["obsidian_links"] = links
         else:
             now = datetime.now().isoformat(timespec="seconds")
             entry = {
