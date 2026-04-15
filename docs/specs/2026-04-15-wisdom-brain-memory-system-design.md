@@ -1,64 +1,64 @@
-# Wisdom Brain — Active Memory System Design
+# 智慧大脑 — 活性记忆系统设计
 
-**Date:** 2026-04-15  
-**Status:** Approved  
-**Scope:** Extend claude-obsidian with a two-layer active memory system (智慧大脑), merging the learning system and memory system into one unified brain.
+**日期：** 2026-04-15  
+**状态：** 已批准  
+**范围：** 在 claude-obsidian 中新增双层活性记忆系统，将学习系统与记忆系统合并为统一的智慧大脑。
 
 ---
 
-## 1. Background
+## 1. 背景
 
-The current system forms a working loop:
+当前系统已形成如下闭环：
 
 ```
 学习系统 (claude-obsidian) → 记忆系统 (Obsidian vault)
 决策系统 (cli-assistant)   → 执行系统 (Harness_engineering)
 ```
 
-The gap: Obsidian is a **knowledge store**, not a **working memory**. An agent starting a new session has no sense of "what's been on my mind lately." It must either search from scratch or rely on the user to provide context manually.
+**缺口**：Obsidian 是**知识存储库**，不是**工作记忆**。Agent 每次启动新会话，没有"最近在想什么"的感知，必须从头搜索，或依赖用户手动提供上下文。
 
-The goal: add an active memory layer between the agent and Obsidian — one that maintains recently active concepts, decays unused ones, and automatically enriches the agent's context on every interaction. Inspired by the CMS (Continuous Memory System) model and the Hope architecture (Self-Referential Titans + CMS).
-
----
-
-## 2. Design Goals
-
-- Agent automatically "remembers" recently used concepts without explicit queries
-- Memory decays naturally over real time (low-frequency knowledge fades)
-- Memory is reinforced when concepts appear in conversation or new notes
-- Obsidian remains the authoritative knowledge store; memory is a hot cache
-- No ML dependencies in v1 — keyword-based matching throughout
-- Single codebase: everything lives inside claude-obsidian
+**目标**：在 Agent 与 Obsidian 之间增加一个活性记忆层，维护最近活跃的概念，对不常用的知识自然衰减，并在每次交互时自动丰富 Agent 的上下文。设计灵感来自 CMS（连续记忆系统）模型和 Hope 架构（自参考 Titans + CMS）。
 
 ---
 
-## 3. Architecture
+## 2. 设计目标
+
+- Agent 自动"记住"最近使用的概念，无需显式查询
+- 记忆随真实时间自然衰减（低频知识淡出）
+- 对话或写入新笔记时，相关记忆得到强化
+- Obsidian 仍是权威知识库；记忆系统是热缓存层
+- v1 不引入 ML 依赖，全程基于关键词匹配
+- 单一代码库：所有逻辑均在 claude-obsidian 内
+
+---
+
+## 3. 架构
 
 ```
 claude-obsidian/
   skills/obsidian/
-    memory_manager.py     ← NEW: manages the active word library
-    obsidian_writer.py    ← EXTENDED: triggers memory update on note write
-    SKILL.md              ← EXTENDED: auto-injects memory context each call
+    memory_manager.py     ← 新增：活性词库管理
+    obsidian_writer.py    ← 扩展：写笔记时触发记忆更新
+    SKILL.md              ← 扩展：每次调用自动注入记忆上下文
 
 Obsidian Vault/
-  _memory.jsonl           ← NEW: persistent long-term active word library
-  _events.jsonl           ← existing
-  _corrections.jsonl      ← existing
+  _memory.jsonl           ← 新增：长期活性词库（持久化）
+  _events.jsonl           ← 已有
+  _corrections.jsonl      ← 已有
 ```
 
-### Two-Layer Memory
+### 双层记忆
 
-| Layer | Storage | Lifetime | Purpose |
-|-------|---------|----------|---------|
-| Short-term activation | In-memory Python dict | Current session | Words activated in this conversation |
-| Long-term active library | `_memory.jsonl` | Cross-session, real-time decay | Persistent active concepts |
+| 层 | 存储位置 | 生命周期 | 作用 |
+|----|--------|--------|------|
+| 短期激活层 | 内存 Python dict | 当前会话 | 本次对话新激活的词 |
+| 长期活性库 | `_memory.jsonl` | 跨会话，真实时间衰减 | 持久的活性概念 |
 
 ---
 
-## 4. Data Model
+## 4. 数据模型
 
-Each entry in `_memory.jsonl`:
+`_memory.jsonl` 每条记录：
 
 ```json
 {
@@ -73,187 +73,187 @@ Each entry in `_memory.jsonl`:
 }
 ```
 
-**Field notes:**
-- `decay_rate` is per-item: high-frequency words get lower decay rates (harder to forget)
-- `obsidian_links` enables drill-down: activating a word can expand to full Obsidian notes
-- `aliases` enable associative matching ("自参考学习" → activates "Titans")
+**字段说明：**
+- `decay_rate` 是 per-item 的：高频词衰减慢，低频词衰减快
+- `obsidian_links` 支持按需展开：激活某个词后可拉取完整 Obsidian 笔记
+- `aliases` 实现联想匹配："自参考学习" → 激活 "Titans"
 
 ---
 
-## 5. Activation and Forgetting
+## 5. 激活与遗忘机制
 
-### Activation Formula (CMS-inspired)
+### 激活公式（CMS 启发）
 
 ```
-activation(t) = base_score × e^(-decay_rate × days_since_last_access)
+activation(t) = base_score × e^(-decay_rate × 距上次访问天数)
               + log(frequency + 1) × 0.1
 ```
 
-- `base_score`: score at last access (starts at 1.0)
-- `decay_rate`: auto-adjusts — high-frequency words: ~0.02 (slow), low-frequency: ~0.15 (fast)
-- `frequency bonus`: floor that prevents frequent words from fully disappearing
+- `base_score`：上次访问时的得分（初始值 1.0）
+- `decay_rate`：随访问次数自动调整；高频词约 0.02（慢衰减），低频词约 0.15（快衰减）
+- `频率奖励`：防止高频词完全归零的底线
 
-### Decay Scenarios
+### 典型场景
 
-| Scenario | Result |
-|----------|--------|
-| Just reinforced today | score ≈ 0.9–1.0, appears in injected context |
-| Learned 7 days ago, not revisited | score ≈ 0.4–0.6, still in library |
-| 30 days no access, low frequency | score < 0.1, **auto-pruned** |
-| Old word reappears | score +0.3 immediately, decay_rate × 0.9 (harder to forget) |
+| 场景 | 结果 |
+|------|------|
+| 今天刚被强化 | score ≈ 0.9~1.0，出现在注入上下文中 |
+| 7 天前学过，未再提起 | score ≈ 0.4~0.6，仍在库中 |
+| 30 天无访问、低频词 | score < 0.1，**自动淘汰** |
+| 旧词再次出现 | score +0.3，decay_rate × 0.9（变得更难忘） |
 
-### Session-End Consolidation ("Sleep Effect")
+### 会话结束时的知识巩固（"睡眠效应"）
 
 ```
-Short-term layer (words activated this session)
+短期激活层（本次会话激活的词）
   ↓
-  ① Already in long-term library → activation++, decay_rate slightly reduced
-  ② Not in library, activated ≥ 2× this session → promoted to long-term library
-  ③ Activated only once → discarded (noise filter)
+  ① 已在长期库 → activation++，decay_rate 小幅降低
+  ② 不在长期库，且本次激活 ≥ 2 次 → 晋升到长期库
+  ③ 只激活 1 次 → 丢弃（噪音过滤）
 ```
 
-Words must appear at least twice in a session to enter long-term memory — mimicking how humans consolidate only repeated impressions.
+一个词在单次会话内至少出现两次才能进入长期记忆，模拟人类"只有反复印象才固化"的规律。
 
-### Capacity
+### 容量上限
 
-Long-term library cap: **500 items** (configurable). When exceeded, prune the lowest `activation_score` entries.
+长期库默认 **500 条**（可配置）。超出时淘汰 `activation_score` 最低的条目。
 
 ---
 
-## 6. Context Injection
+## 6. 上下文自动注入
 
-### Trigger Flow
+### 触发流程
 
 ```
-User message arrives
+用户消息到达
   ↓
-SKILL.md extracts keywords (nouns, proper nouns, #tags, [[wikilinks]])
+SKILL.md 提取关键词（名词、专有词、#标签、[[wikilink]]）
   ↓
 memory_manager.query(keywords)
-  ├─ Exact match on word / aliases
-  ├─ Substring match ("自参考" → "Titans")
-  └─ Shared obsidian_link association
+  ├─ 精确匹配 word / aliases
+  ├─ 子串匹配（"自参考" → "Titans"）
+  └─ 同 obsidian_link 关联
   ↓
-Return top-5 by activation_score
+返回 top-5 活性词，按 activation_score 排序
   ↓
-Inject <active_memory> block into context
+注入 <active_memory> 块到对话上下文
   ↓
-If user says "展开" / "细节" / "给我原文"
-  └─ Load full Obsidian note via existing query capability
+用户说"展开"/"细节"/"给我原文"
+  └─ 调用已有 query 能力，从 Obsidian 加载完整笔记
 ```
 
-### Injected Format
+### 注入格式（Agent 视角）
 
 ```
 <active_memory>
-● Titans (0.85)  aliases: 自参考学习, test-time
+● Titans (0.85)  别名: 自参考学习, test-time
   → [[Literature - Titans论文.md]]
-● CMS (0.72)  aliases: 多频率层, 连续记忆系统
-● 遗忘缓解 (0.51)  aliases: catastrophic forgetting
+● CMS (0.72)  别名: 多频率层, 连续记忆系统
+● 遗忘缓解 (0.51)  别名: catastrophic forgetting
 </active_memory>
 ```
 
-### Keyword Extraction (v1, no ML)
+### 关键词提取策略（v1，无 ML 依赖）
 
-- Strip stopwords (的/是/了/in/the/a…)
-- Keep: capitalized English terms, Chinese noun phrases (2–4 chars), `#tags`, `[[wikilinks]]`
-- Match against `word` + `aliases` fields in memory
+- 过滤停用词（的/是/了/in/the/a…）
+- 保留：英文大写词、中文名词短语（2~4 字）、`#标签`、`[[wikilink]]`
+- 匹配记忆条目的 `word` + `aliases` 字段
 
 ---
 
-## 7. Memory Write Sources
+## 7. 记忆写入来源
 
-### Source A: Obsidian Note Writes
+### 来源 A：Obsidian 写笔记时
 
-When `obsidian_writer.py` writes a note, it calls `memory_manager.extract_and_upsert()`:
+`obsidian_writer.py` 写完笔记后自动调用 `memory_manager.extract_and_upsert()`：
 
 ```
-Write Literature / Concept / Topic note
+写入 Literature / Concept / Topic 笔记
   ↓
-Extract from key fields:
-  - Concept note   → word = title, aliases from "一句话定义"
-  - Literature note → noun phrases from "核心观点"
-  - Topic note     → phrases from "当前结论"
+按笔记类型提取字段：
+  - Concept 笔记   → word = 标题，aliases 来自"一句话定义"
+  - Literature 笔记 → 从"核心观点"中提取名词短语
+  - Topic 笔记     → 从"当前结论"中提取短语
   ↓
-Upsert to _memory.jsonl:
-  - Existing word → frequency++, update obsidian_links
-  - New word → create entry, initial activation_score = 0.6, decay_rate = 0.1
+写入 _memory.jsonl：
+  - 已有词 → frequency++，更新 obsidian_links
+  - 新词   → 创建条目，初始 activation_score = 0.6，decay_rate = 0.1
 ```
 
-### Source B: Conversation Reinforcement
+### 来源 B：对话中被强化时
 
 ```
-User message matches a word in memory
+用户消息命中记忆中的词
   ↓
 memory_manager.activate(word)
-  - activation_score += 0.3 (cap 1.0)
-  - decay_rate × 0.9 (harder to forget)
-  - last_activated = now
+  - activation_score += 0.3（上限 1.0）
+  - decay_rate × 0.9（变得更难忘）
+  - last_activated = 当前时间
   ↓
-Lazy write: batch flush to _memory.jsonl at session end
-           (triggered by Claude Code Stop hook → calls memory_manager.consolidate_and_flush())
+懒写：会话结束时批量 flush 到 _memory.jsonl
+      （由 Claude Code Stop hook 触发 → 调用 memory_manager.consolidate_and_flush()）
 ```
 
-### Source Roles
+### 两个来源的分工
 
-| Source | What it produces | Typical words |
-|--------|-----------------|---------------|
-| Obsidian writes | Knowledge skeleton (cold start) | Titans, 梯度下降, RAG |
-| Conversation activation | Recently live concepts (hot update) | Hope架构, 智慧大脑, CMS |
+| 来源 | 产生什么 | 典型词 |
+|------|--------|------|
+| Obsidian 写入 | 知识体系的概念骨架（冷启动） | Titans、梯度下降、RAG |
+| 对话激活 | 最近真正在用的概念（热更新） | Hope架构、智慧大脑、CMS |
 
-Obsidian builds the skeleton; conversation determines which bones are currently active.
+Obsidian 建立骨架，对话决定哪些骨架当前是活跃的。
 
 ---
 
-## 8. Complete Data Flow
+## 8. 完整数据流
 
 ```
-[Conversation] ──activate──→ [Short-term layer] ──consolidate──→ [_memory.jsonl]
-                                                                       ↑        ↓
-[Obsidian write] ──extract──────────────────────────────────────────────        ↓
-                                                                      auto-inject↓
-[Agent Context]  ←──────────────── <active_memory> ←──────────────────────────
-                                          ↑
-                                  on "展开" request
-                               fetch full Obsidian note
+[对话] ──激活──→ [短期激活层] ──巩固──→ [长期活性库 _memory.jsonl]
+                                              ↑            ↓
+[Obsidian 写入] ──提取────────────────────────             ↓
+                                                  自动注入 ↓
+[Agent 上下文]  ←──────────── <active_memory> ←───────────
+                                      ↑
+                              用户说"展开"时
+                           从 Obsidian 拉取全文
 ```
 
 ---
 
-## 9. New Commands
+## 9. 新增命令
 
-| Command | Action |
-|---------|--------|
-| `/obsidian memory` | Show top-20 active words with scores |
-| `/obsidian memory reinforce <word>` | Manually boost activation |
-| `/obsidian memory forget <word>` | Manually remove |
-| `/obsidian memory decay` | Run one decay cycle immediately |
-
----
-
-## 10. Out of Scope (v1)
-
-- Semantic similarity / embeddings (keyword matching only in v1)
-- Automatic cross-session conversation logging to Obsidian
-- Memory sharing across multiple vaults
-- Background decay daemon (decay runs lazily on access)
+| 命令 | 功能 |
+|------|------|
+| `/obsidian memory` | 查看当前活性词库 top-20 |
+| `/obsidian memory reinforce <词>` | 手动强化某个词 |
+| `/obsidian memory forget <词>` | 手动淡忘某个词 |
+| `/obsidian memory decay` | 立即运行一次衰减周期 |
 
 ---
 
-## 11. Implementation Modules
+## 10. v1 范围外
 
-| Module | Responsibility |
-|--------|---------------|
-| `memory_manager.py` | Load/save `_memory.jsonl`, query, activate, decay, consolidate, prune |
-| `obsidian_writer.py` (extended) | Call `extract_and_upsert()` after every note write |
-| `SKILL.md` (extended) | Extract keywords from input, inject `<active_memory>`, handle `/obsidian memory` commands |
+- 语义相似度 / 向量嵌入（v1 只做关键词匹配）
+- 跨会话对话内容自动归档到 Obsidian
+- 多 vault 记忆共享
+- 后台衰减守护进程（衰减在访问时懒执行）
 
 ---
 
-## 12. Success Criteria
+## 11. 实现模块
 
-- [ ] Agent context automatically includes top-5 relevant active words on every interaction
-- [ ] Words decay and disappear after 30+ days without access (for low-frequency words)
-- [ ] Writing a Concept note seeds the memory library within the same session
-- [ ] A word activated twice in one session is promoted to long-term library
-- [ ] `/obsidian memory` shows a readable ranked list of current active concepts
+| 模块 | 职责 |
+|------|------|
+| `memory_manager.py` | 加载/保存 `_memory.jsonl`，查询、激活、衰减、巩固、淘汰 |
+| `obsidian_writer.py`（扩展） | 每次写笔记后调用 `extract_and_upsert()` |
+| `SKILL.md`（扩展） | 从输入提取关键词，注入 `<active_memory>`，处理 `/obsidian memory` 命令 |
+
+---
+
+## 12. 验收标准
+
+- [ ] 每次交互时，Agent 上下文自动包含 top-5 相关活性词
+- [ ] 低频词 30 天以上无访问后自动淘汰
+- [ ] 写入 Concept 笔记后，当次会话即可从记忆库中检索到该概念
+- [ ] 单次会话内被激活两次的词晋升到长期库
+- [ ] `/obsidian memory` 输出可读的活性词排名列表
