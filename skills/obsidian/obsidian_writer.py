@@ -403,6 +403,18 @@ def write_note(
                 [f"Action: created", f"Path: {filepath.relative_to(vault)}"],
             )
 
+    # 记忆更新：提取关键词写入活性词库（跳过草稿和 fleeting/moc）
+    if not is_draft and note_type not in ("moc", "fleeting"):
+        try:
+            import sys as _sys
+            _sys.path.insert(0, str(Path(__file__).parent))
+            from memory_manager import MemoryManager
+            mm = MemoryManager(vault)
+            mm.extract_and_upsert(note_type, title, fields, filepath.name)
+            mm._save()
+        except Exception:
+            pass  # 记忆更新失败不阻断笔记写入
+
     return filepath
 
 

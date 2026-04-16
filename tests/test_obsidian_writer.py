@@ -1779,3 +1779,30 @@ class TestIngestPreviewCLI:
             assert "[Link suggestions]" in result.stdout
             assert "[Feedback hint]" in result.stdout
             assert "--suggestion-type link" in result.stdout
+
+
+class TestMemoryIntegration:
+    """写笔记后，memory_manager 自动被调用。"""
+
+    def test_write_concept_note_seeds_memory(self, tmp_path):
+        """写入 concept 笔记后，_memory.jsonl 中应出现该词条。"""
+        import json
+        from skills.obsidian.memory_manager import MemoryManager, _MEMORY_FILE
+
+        vault = tmp_path
+        # 创建必要目录
+        (vault / "03-Knowledge" / "Concepts").mkdir(parents=True)
+
+        write_note(
+            vault=vault,
+            note_type="concept",
+            title="Transformer",
+            fields={"一句话定义": "注意力机制架构", "核心机制": "self-attention"},
+            is_draft=False,
+        )
+
+        memory_file = vault / _MEMORY_FILE
+        assert memory_file.exists(), "_memory.jsonl 应被创建"
+        entries = [json.loads(l) for l in memory_file.read_text(encoding="utf-8").splitlines() if l]
+        words = [e["word"] for e in entries]
+        assert "Transformer" in words
