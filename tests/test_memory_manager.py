@@ -144,3 +144,98 @@ class TestDecay:
         assert len(mm._long_term) == 5
         assert "word9" in mm._long_term
         assert "word0" not in mm._long_term
+
+
+class TestQuery:
+    def _populated_mm(self, vault):
+        mm = MemoryManager(vault)
+        now = datetime.now().isoformat(timespec="seconds")
+        for word, aliases, score, links in [
+            ("Titans", ["自参考学习", "test-time"], 0.9, ["Literature - Titans.md"]),
+            ("CMS",    ["多频率层", "连续记忆"],    0.7, []),
+            ("RAG",    ["检索增强生成"],             0.5, []),
+        ]:
+            mm._long_term[word] = {
+                "word": word, "aliases": aliases,
+                "activation_score": score, "frequency": 3,
+                "last_activated": now, "created": now,
+                "decay_rate": 0.02, "obsidian_links": links,
+            }
+        return mm
+
+    def test_exact_word_match(self, vault):
+        mm = self._populated_mm(vault)
+        results = mm.query(["Titans"])
+        assert results[0]["word"] == "Titans"
+
+    def test_alias_match(self, vault):
+        mm = self._populated_mm(vault)
+        results = mm.query(["自参考"])
+        words = [r["word"] for r in results]
+        assert "Titans" in words
+
+    def test_returns_at_most_5(self, vault):
+        mm = MemoryManager(vault)
+        now = datetime.now().isoformat(timespec="seconds")
+        for i in range(10):
+            mm._long_term[f"word{i}"] = {
+                "word": f"word{i}", "aliases": [f"alias{i}"],
+                "activation_score": 0.5, "frequency": 1,
+                "last_activated": now, "created": now,
+                "decay_rate": 0.05, "obsidian_links": [],
+            }
+        results = mm.query(["word"])
+        assert len(results) <= 5
+
+    def test_returns_empty_for_no_match(self, vault):
+        mm = self._populated_mm(vault)
+        results = mm.query(["nonexistent_xyz"])
+        assert results == []
+
+    def test_sorted_by_activation_score(self, vault):
+        mm = self._populated_mm(vault)
+        results = mm.query(["记忆", "Titans", "CMS"])
+        scores = [mm._current_activation(r) for r in results]
+        assert scores == sorted(scores, reverse=True)
+
+
+class TestActivate:
+    def test_boosts_activation_score(self, vault):
+        mm = MemoryManager(vault)
+        now = datetime.now().isoformat(timespec="seconds")
+        mm._long_term["Titans"] = {
+            "word": "Titans", "aliases": [], "activation_score": 0.5,
+            "frequency": 2, "last_activated": now, "created": now,
+            "decay_rate": 0.1, "obsidian_links": [],
+        }
+        mm.activate("Titans")
+        assert mm._long_term["Titans"]["activation_score"] > 0.5
+
+    def test_activation_capped_at_1(self, vault):
+        mm = MemoryManager(vault)
+        now = datetime.now().isoformat(timespec="seconds")
+        mm._long_term["X"] = {
+            "word": "X", "aliases": [], "activation_score": 0.95,
+            "frequency": 1, "last_activated": now, "created": now,
+            "decay_rate": 0.1, "obsidian_links": [],
+        }
+        mm.activate("X")
+        assert mm._long_term["X"]["activation_score"] <= 1.0
+
+    def test_reduces_decay_rate(self, vault):
+        mm = MemoryManager(vault)
+        now = datetime.now().isoformat(timespec="seconds")
+        mm._long_term["Y"] = {
+            "word": "Y", "aliases": [], "activation_score": 0.5,
+            "frequency": 1, "last_activated": now, "created": now,
+            "decay_rate": 0.1, "obsidian_links": [],
+        }
+        mm.activate("Y")
+        assert mm._long_term["Y"]["decay_rate"] < 0.1
+
+    def test_increments_short_term_counter(self, vault):
+        mm = MemoryManager(vault)
+        mm.activate("NewWord")
+        assert mm._short_term.get("NewWord", 0) == 1
+        mm.activate("NewWord")
+        assert mm._short_term.get("NewWord", 0) == 2

@@ -120,3 +120,43 @@ class MemoryManager:
             reverse=True,
         )
         self._long_term = {e["word"]: e for e in sorted_entries[:max_items]}
+
+    def query(self, keywords: list) -> list:
+        """返回最多 5 条最相关的活性词，按激活分数排序。"""
+        matched = set()
+        for kw in keywords:
+            kw_lower = kw.lower()
+            for word, entry in self._long_term.items():
+                if kw_lower in word.lower():
+                    matched.add(word)
+                    continue
+                for alias in entry.get("aliases", []):
+                    if kw_lower in alias.lower():
+                        matched.add(word)
+                        break
+
+        # 同 obsidian_link 的关联词
+        matched_links = set()
+        for word in matched:
+            links = set(self._long_term[word].get("obsidian_links", []))
+            for other_word, other_entry in self._long_term.items():
+                if other_word not in matched:
+                    other_links = set(other_entry.get("obsidian_links", []))
+                    if links & other_links:
+                        matched_links.add(other_word)
+
+        all_matched = matched | matched_links
+        results = [self._long_term[w] for w in all_matched]
+        results.sort(key=lambda e: self._current_activation(e), reverse=True)
+        return results[:5]
+
+    def activate(self, word: str):
+        """强化长期记忆中的词，并记录短期激活次数。"""
+        self._short_term[word] = self._short_term.get(word, 0) + 1
+        if word in self._long_term:
+            entry = dict(self._long_term[word])
+            entry["activation_score"] = min(1.0, round(entry["activation_score"] + 0.3, 4))
+            entry["decay_rate"] = round(entry["decay_rate"] * 0.9, 4)
+            entry["frequency"] += 1
+            entry["last_activated"] = datetime.now().isoformat(timespec="seconds")
+            self._long_term[word] = entry
