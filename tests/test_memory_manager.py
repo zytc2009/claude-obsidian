@@ -239,3 +239,64 @@ class TestActivate:
         assert mm._short_term.get("NewWord", 0) == 1
         mm.activate("NewWord")
         assert mm._short_term.get("NewWord", 0) == 2
+
+
+class TestConsolidate:
+    def test_promotes_word_activated_twice(self, vault):
+        mm = MemoryManager(vault)
+        mm._short_term["NewConcept"] = 2
+        mm.consolidate_and_flush()
+        assert "NewConcept" in mm._long_term
+
+    def test_discards_word_activated_once(self, vault):
+        mm = MemoryManager(vault)
+        mm._short_term["Noise"] = 1
+        mm.consolidate_and_flush()
+        assert "Noise" not in mm._long_term
+
+    def test_clears_short_term_after_flush(self, vault):
+        mm = MemoryManager(vault)
+        mm._short_term["X"] = 3
+        mm.consolidate_and_flush()
+        assert mm._short_term == {}
+
+    def test_saves_to_disk_on_flush(self, vault):
+        mm = MemoryManager(vault)
+        mm._short_term["Persistent"] = 2
+        mm.consolidate_and_flush()
+        mm2 = MemoryManager(vault)
+        assert "Persistent" in mm2._long_term
+
+
+class TestFormatContext:
+    def test_returns_empty_string_when_no_memory(self, vault):
+        mm = MemoryManager(vault)
+        assert mm.format_context() == ""
+
+    def test_includes_active_memory_tags(self, vault):
+        mm = MemoryManager(vault)
+        now = datetime.now().isoformat(timespec="seconds")
+        mm._long_term["Titans"] = {
+            "word": "Titans", "aliases": ["自参考学习"],
+            "activation_score": 0.9, "frequency": 5,
+            "last_activated": now, "created": now,
+            "decay_rate": 0.02, "obsidian_links": ["Literature - Titans.md"],
+        }
+        ctx = mm.format_context()
+        assert "<active_memory>" in ctx
+        assert "Titans" in ctx
+        assert "自参考学习" in ctx
+        assert "</active_memory>" in ctx
+
+    def test_returns_at_most_5_items(self, vault):
+        mm = MemoryManager(vault)
+        now = datetime.now().isoformat(timespec="seconds")
+        for i in range(10):
+            mm._long_term[f"word{i}"] = {
+                "word": f"word{i}", "aliases": [],
+                "activation_score": 0.5, "frequency": 1,
+                "last_activated": now, "created": now,
+                "decay_rate": 0.05, "obsidian_links": [],
+            }
+        ctx = mm.format_context()
+        assert ctx.count("●") <= 5

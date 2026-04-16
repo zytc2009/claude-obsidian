@@ -160,3 +160,54 @@ class MemoryManager:
             entry["frequency"] += 1
             entry["last_activated"] = datetime.now().isoformat(timespec="seconds")
             self._long_term[word] = entry
+
+    def consolidate_and_flush(self):
+        """将短期激活词晋升到长期库，运行衰减，保存到磁盘。
+        由 Claude Code Stop hook 触发。"""
+        for word, count in self._short_term.items():
+            if count >= 2 and word not in self._long_term:
+                self.upsert(word)
+        self.run_decay()
+        self.prune()
+        self._save()
+        self._short_term.clear()
+
+    def format_context(self) -> str:
+        """格式化 top-5 活性词，用于注入 Agent 上下文。"""
+        top = sorted(
+            self._long_term.values(),
+            key=lambda e: self._current_activation(e),
+            reverse=True,
+        )[:5]
+        if not top:
+            return ""
+        lines = ["<active_memory>"]
+        for entry in top:
+            score = self._current_activation(entry)
+            aliases_str = ", ".join(entry.get("aliases", []))
+            line = f"● {entry['word']} ({score:.2f})"
+            if aliases_str:
+                line += f"  别名: {aliases_str}"
+            links = entry.get("obsidian_links", [])
+            if links:
+                line += f"\n  → [[{links[0]}]]"
+            lines.append(line)
+        lines.append("</active_memory>")
+        return "\n".join(lines)
+
+    def show_status(self, top_n: int = 20) -> str:
+        """返回人类可读的活性词库状态。"""
+        entries = sorted(
+            self._long_term.values(),
+            key=lambda e: self._current_activation(e),
+            reverse=True,
+        )[:top_n]
+        if not entries:
+            return "[Memory] 活性词库为空"
+        lines = [f"[Memory] 活性词库 top-{min(top_n, len(entries))} / {len(self._long_term)} 条\n"]
+        for i, entry in enumerate(entries, 1):
+            score = self._current_activation(entry)
+            lines.append(
+                f"  {i:2}. {entry['word']:<20} score={score:.2f}  freq={entry['frequency']}"
+            )
+        return "\n".join(lines)
