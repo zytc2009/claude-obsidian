@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from skills.obsidian.session_memory import _SESSION_MEMORY_FILE
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = REPO_ROOT / "skills" / "obsidian" / "obsidian_writer.py"
@@ -43,6 +44,10 @@ from skills.obsidian.obsidian_writer import (
     render_topic,
     run_ingest_sync,
     _topic_candidate_from_stem,
+    find_session_relevant_notes,
+    organize_vault,
+    query_vault,
+    record_session_query,
     suggest_links,
     suggest_new_topic,
     touch_updated,
@@ -378,6 +383,257 @@ class TestWriteNote:
             assert "write | Literature - Logged Paper" in text
             assert "Action: created" in text
 
+    def test_write_note_updates_session_memory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            write_note(
+                vault=vault,
+                note_type="topic",
+                title="Attention Mechanism",
+                fields={"主题说明": "x", "当前结论": "y"},
+                is_draft=False,
+            )
+            data = json.loads((vault / _SESSION_MEMORY_FILE).read_text(encoding="utf-8"))
+            assert "Topic - Attention Mechanism.md" in data["active_notes"]
+            assert "Topic - Attention Mechanism" in data["active_topics"]
+
+
+class TestSessionReadPathHelpers:
+    def test_record_session_query_updates_session_memory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            record_session_query(vault, "attention limits")
+            data = json.loads((vault / _SESSION_MEMORY_FILE).read_text(encoding="utf-8"))
+            assert data["recent_queries"] == ["attention limits"]
+
+    def test_find_session_relevant_notes_prefers_active_topics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            topic_dir = vault / "03-Knowledge/Topics"
+            lit_dir = vault / "03-Knowledge/Literature"
+            topic_dir.mkdir(parents=True, exist_ok=True)
+            lit_dir.mkdir(parents=True, exist_ok=True)
+            note = lit_dir / "Literature - Attention Survey.md"
+            note.write_text("---\ntype: literature\n---\n# 核心观点\ny\n", encoding="utf-8")
+            topic_path = write_note(
+                vault=vault,
+                note_type="topic",
+                title="Attention Mechanism",
+                fields={"主题说明": "x", "当前结论": "y"},
+                is_draft=False,
+            )
+            # re-add literature note into session state after topic creation
+            from skills.obsidian.session_memory import SessionMemory
+            SessionMemory(vault, persist=True).add_note("Literature - Attention Survey.md")
+            results = find_session_relevant_notes(vault, "attention")
+            assert results
+            assert results[0].name == topic_path.name
+
+    def test_find_session_relevant_notes_uses_query_overlap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            topic_dir = vault / "03-Knowledge/Topics"
+            lit_dir = vault / "03-Knowledge/Literature"
+            topic_dir.mkdir(parents=True, exist_ok=True)
+            lit_dir.mkdir(parents=True, exist_ok=True)
+            topic = topic_dir / "Topic - KV Cache.md"
+            note = lit_dir / "Literature - Attention Survey.md"
+            topic.write_text("---\ntype: topic\n---\n# 当前结论\nx\n", encoding="utf-8")
+            note.write_text("---\ntype: literature\n---\n# 核心观点\ny\n", encoding="utf-8")
+            from skills.obsidian.session_memory import SessionMemory
+            sm = SessionMemory(vault, persist=True)
+            sm.add_topic("Topic - KV Cache")
+            sm.add_note("Literature - Attention Survey.md")
+            results = find_session_relevant_notes(vault, "attention")
+            assert results
+            assert results[0].name == "Literature - Attention Survey.md"
+
+
+class TestQueryVault:
+    def test_tier1_returns_topic_summaries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            topic_dir = vault / "03-Knowledge/Topics"
+            topic_dir.mkdir(parents=True, exist_ok=True)
+            topic = topic_dir / "Topic - RAG.md"
+            topic.write_text(
+                "---\ntype: topic\n---\n"
+                "# 主题说明\nRAG overview\n\n"
+                "# 当前结论\nDense retrieval reduces hallucination\n\n"
+                "# 未解决问题\nHow to rank long context chunks?\n",
+                encoding="utf-8",
+            )
+            result = query_vault(vault, "rag hallucination")
+            assert len(result["tier1_topics"]) == 1
+            assert result["tier1_topics"][0]["title"] == "Topic - RAG"
+            assert "Dense retrieval" in result["tier1_topics"][0]["当前结论"]
+            assert result["tier2_grouped"] == []
+
+    def test_include_details_groups_notes_under_topic_and_keeps_orphans(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            topic_dir = vault / "03-Knowledge/Topics"
+            lit_dir = vault / "03-Knowledge/Literature"
+            topic_dir.mkdir(parents=True, exist_ok=True)
+            lit_dir.mkdir(parents=True, exist_ok=True)
+            topic = topic_dir / "Topic - Attention Mechanism.md"
+            linked = lit_dir / "Literature - Attention Survey.md"
+            orphan = lit_dir / "Literature - Attention Benchmark.md"
+            topic.write_text(
+                "---\ntype: topic\n---\n"
+                "# 主题说明\nAttention overview\n\n"
+                "# 当前结论\nAttention remains the core sequence primitive\n",
+                encoding="utf-8",
+            )
+            linked.write_text(
+                "---\ntype: literature\n---\n"
+                "# 核心观点\nAttention improves sequence modeling\n\n"
+                "# 知识连接\n[[Topic - Attention Mechanism]]\n",
+                encoding="utf-8",
+            )
+            orphan.write_text(
+                "---\ntype: literature\n---\n"
+                "# 核心观点\nAttention benchmark highlights latency tradeoffs\n",
+                encoding="utf-8",
+            )
+            result = query_vault(vault, "attention", include_details=True)
+            assert result["tier1_topics"][0]["title"] == "Topic - Attention Mechanism"
+            assert result["tier2_grouped"][0]["topic"] == "Topic - Attention Mechanism"
+            assert result["tier2_grouped"][0]["notes"][0]["title"] == "Literature - Attention Survey"
+            orphan_titles = [item["title"] for item in result["orphans"]]
+            assert "Literature - Attention Benchmark" in orphan_titles
+
+    def test_query_top1_topic_is_stable_after_related_source_ingest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            topic_dir = vault / "03-Knowledge/Topics"
+            lit_dir = vault / "03-Knowledge/Literature"
+            topic_dir.mkdir(parents=True, exist_ok=True)
+            lit_dir.mkdir(parents=True, exist_ok=True)
+            topic = topic_dir / "Topic - RAG.md"
+            topic.write_text(
+                "---\ntype: topic\n---\n"
+                "# 主题说明\nRAG overview\n\n"
+                "# 当前结论\nDense retrieval improves grounding\n",
+                encoding="utf-8",
+            )
+            first = query_vault(vault, "rag grounding")
+            assert first["tier1_topics"][0]["title"] == "Topic - RAG"
+
+            related = lit_dir / "Literature - RAG Systems Survey.md"
+            related.write_text(
+                "---\ntype: literature\n---\n"
+                "# 核心观点\nRAG improves factuality and grounding\n\n"
+                "# 知识连接\n[[Topic - RAG]]\n",
+                encoding="utf-8",
+            )
+            second = query_vault(vault, "rag grounding", include_details=True)
+            assert second["tier1_topics"][0]["title"] == "Topic - RAG"
+            assert second["tier2_grouped"][0]["topic"] == "Topic - RAG"
+
+
+class TestOrganizeVault:
+    def test_returns_session_hits_and_related_matches(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            topic_dir = vault / "03-Knowledge/Topics"
+            lit_dir = vault / "03-Knowledge/Literature"
+            inbox_dir = vault / "00-Inbox"
+            topic_dir.mkdir(parents=True, exist_ok=True)
+            lit_dir.mkdir(parents=True, exist_ok=True)
+            inbox_dir.mkdir(parents=True, exist_ok=True)
+            topic = topic_dir / "Topic - Attention Mechanism.md"
+            lit = lit_dir / "Literature - Attention Survey.md"
+            inbox = inbox_dir / "Literature - Attention Draft.md"
+            topic.write_text("---\ntype: topic\n---\n# 当前结论\nattention summary\n", encoding="utf-8")
+            lit.write_text("---\ntype: literature\n---\n# 核心观点\nattention details\n", encoding="utf-8")
+            inbox.write_text("---\ntype: literature\nstatus: draft\n---\n# 核心观点\nattention draft\n", encoding="utf-8")
+            write_note(
+                vault=vault,
+                note_type="topic",
+                title="Attention Mechanism",
+                fields={"主题说明": "x", "当前结论": "y"},
+                is_draft=False,
+            )
+            result = organize_vault(vault, "attention")
+            assert result["session_hits"]
+            titles = [item["title"] for item in result["matches"]]
+            assert "Literature - Attention Survey" in titles
+            assert "Literature - Attention Draft" in titles
+            assert result["suggested_output"] == "topic"
+            assert result["confidence"] in {"medium", "high"}
+            assert result["reasons"]
+
+    def test_returns_moc_when_only_shallow_single_match_exists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            lit_dir = vault / "03-Knowledge/Literature"
+            lit_dir.mkdir(parents=True, exist_ok=True)
+            lit = lit_dir / "Literature - Bitrate Survey.md"
+            lit.write_text("---\ntype: literature\n---\n# 核心观点\nbitrate tradeoffs\n", encoding="utf-8")
+            result = organize_vault(vault, "bitrate")
+            assert result["suggested_output"] == "moc"
+            assert result["confidence"] in {"medium", "high"}
+            assert any("shallow cluster" in reason or "no strong topic-level" in reason for reason in result["reasons"])
+
+    def test_orphan_reduction_after_topic_convergence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            topic_dir = vault / "03-Knowledge/Topics"
+            lit_dir = vault / "03-Knowledge/Literature"
+            topic_dir.mkdir(parents=True, exist_ok=True)
+            lit_dir.mkdir(parents=True, exist_ok=True)
+            note_a = lit_dir / "Literature - Attention Survey.md"
+            note_b = lit_dir / "Literature - Attention Systems.md"
+            note_a.write_text(
+                "---\ntype: literature\nstatus: active\ncreated: 2026-04-01\nupdated: 2026-04-01\n---\n"
+                "# 核心观点\nattention overview\n",
+                encoding="utf-8",
+            )
+            note_b.write_text(
+                "---\ntype: literature\nstatus: active\ncreated: 2026-04-01\nupdated: 2026-04-01\n---\n"
+                "# 核心观点\nattention systems\n",
+                encoding="utf-8",
+            )
+
+            before = organize_vault(vault, "attention")
+            before_orphans = sum(
+                1 for item in before["matches"]
+                if item["type"] in {"literature", "concept", "project"} and not item["parent_topics"]
+            )
+            assert before_orphans == 2
+            assert before["suggested_output"] == "topic"
+
+            write_note(
+                vault=vault,
+                note_type="topic",
+                title="Attention Mechanism",
+                fields={
+                    "主题说明": "attention overview",
+                    "当前结论": "attention remains central",
+                    "重要资料": "[[Literature - Attention Survey]]\n[[Literature - Attention Systems]]",
+                },
+                is_draft=False,
+            )
+
+            note_a.write_text(
+                note_a.read_text(encoding="utf-8") + "\n# 知识连接\n[[Topic - Attention Mechanism]]\n",
+                encoding="utf-8",
+            )
+            note_b.write_text(
+                note_b.read_text(encoding="utf-8") + "\n# 知识连接\n[[Topic - Attention Mechanism]]\n",
+                encoding="utf-8",
+            )
+
+            after = organize_vault(vault, "attention")
+            after_orphans = sum(
+                1 for item in after["matches"]
+                if item["type"] in {"literature", "concept", "project"} and not item["parent_topics"]
+            )
+            assert after_orphans == 0
+            assert after["confidence"] in {"medium", "high"}
+            assert any("existing topic match" in reason for reason in after["reasons"])
+
 
 class TestParseFrontmatter:
     def test_extracts_basic_fields(self):
@@ -466,6 +722,20 @@ class TestSuggestionFeedback:
                 for line in events_path.read_text(encoding="utf-8").splitlines()
             ]
             assert events[0]["target_notes"] == ["Topic - Attention"]
+
+    def test_append_suggestion_feedback_updates_session_rejections(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            append_suggestion_feedback(
+                vault,
+                suggestion_type="link",
+                action="reject",
+                source_note="Literature - Attention Survey",
+                target_notes=["03-Knowledge/Topics/Topic - Attention.md"],
+                reason="too broad",
+            )
+            data = json.loads((vault / _SESSION_MEMORY_FILE).read_text(encoding="utf-8"))
+            assert data["rejected_targets"]["Literature - Attention Survey"] == ["Topic - Attention"]
 
 
 class TestSupportingSections:
@@ -591,6 +861,38 @@ class TestRunIngestSync:
             assert "OpenAI, 2026-04-13" in primary_text
             assert "new topic conclusion" in topic_text
             assert "# Conflicts" in topic_text
+
+    def test_records_updated_notes_in_session_memory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            lit_dir = vault / "03-Knowledge/Literature"
+            topic_dir = vault / "03-Knowledge/Topics"
+            lit_dir.mkdir(parents=True, exist_ok=True)
+            topic_dir.mkdir(parents=True, exist_ok=True)
+            primary = lit_dir / "Literature - Attention Survey.md"
+            primary.write_text(
+                "---\ntype: literature\nupdated: 2026-01-01\n---\n# 核心观点\nold\n",
+                encoding="utf-8",
+            )
+            topic = topic_dir / "Topic - Attention Mechanism.md"
+            topic.write_text(
+                "---\ntype: topic\nupdated: 2026-01-01\n---\n# 当前结论\nold topic\n",
+                encoding="utf-8",
+            )
+            plan = {
+                "primary_fields": {"核心观点": "new primary synthesis"},
+                "cascade_updates": [
+                    {
+                        "target": "03-Knowledge/Topics/Topic - Attention Mechanism.md",
+                        "fields": {"当前结论": "new topic conclusion"},
+                    }
+                ],
+            }
+            run_ingest_sync(vault, primary, plan)
+            data = json.loads((vault / _SESSION_MEMORY_FILE).read_text(encoding="utf-8"))
+            assert "Literature - Attention Survey.md" in data["active_notes"]
+            assert "Topic - Attention Mechanism.md" in data["active_notes"]
+            assert "Topic - Attention Mechanism" in data["active_topics"]
 
 
 class TestExtractWikilinks:
@@ -938,6 +1240,29 @@ class TestSuggestLinks:
             assert "03-Knowledge/MOCs/MOC - Attention.md" in paths[0]
             assert all("Topic - Attention Mechanism" not in Path(path).as_posix() for path, _ in suggestions)
 
+    def test_same_session_rejection_downranks_target_immediately(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self._make_vault(tmp)
+            topic = vault / "03-Knowledge/Topics/Topic - Attention Mechanism.md"
+            moc = vault / "03-Knowledge/MOCs/MOC - Attention.md"
+            self._write(topic, "---\ntype: topic\n---\n# 重要资料\nAttention research\n")
+            self._write(moc, "---\ntype: moc\n---\n# 资料\nAttention links\n")
+            new_note = vault / "03-Knowledge/Literature/Literature - Attention Survey.md"
+            self._write(new_note, "---\ntype: literature\n---\ncontent\n")
+
+            append_suggestion_feedback(
+                vault,
+                suggestion_type="link",
+                action="reject",
+                source_note="Literature - Attention Survey",
+                target_notes=["Topic - Attention Mechanism"],
+                reason="too broad in this session",
+            )
+
+            suggestions = suggest_links(vault, new_note)
+            assert "MOC - Attention.md" in Path(suggestions[0][0]).name
+            assert all("Topic - Attention Mechanism" not in Path(path).stem for path, _ in suggestions)
+
 
 class TestOrphanOnCreate:
     def _make_vault(self, tmp: str) -> Path:
@@ -1244,6 +1569,118 @@ class TestCLI:
             assert result.returncode == 0
             assert "[OK] Written:" in result.stdout
             assert (Path(tmp) / _LOG_FILE).exists()
+
+    def test_query_mode_outputs_tier1_topics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            topic_dir = Path(tmp) / "03-Knowledge/Topics"
+            topic_dir.mkdir(parents=True, exist_ok=True)
+            (topic_dir / "Topic - RAG.md").write_text(
+                "---\ntype: topic\n---\n"
+                "# 主题说明\nRAG overview\n\n"
+                "# 当前结论\nDense retrieval reduces hallucination\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_PATH),
+                    "--type", "query",
+                    "--query", "rag hallucination",
+                    "--vault", tmp,
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                cwd=str(REPO_ROOT),
+            )
+            assert result.returncode == 0
+            assert "[Tier 1: Topics]" in result.stdout
+            assert "[[Topic - RAG]]" in result.stdout
+            assert "Dense retrieval reduces hallucination" in result.stdout
+
+    def test_query_mode_with_details_outputs_grouped_notes_and_orphans(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            topic_dir = Path(tmp) / "03-Knowledge/Topics"
+            lit_dir = Path(tmp) / "03-Knowledge/Literature"
+            topic_dir.mkdir(parents=True, exist_ok=True)
+            lit_dir.mkdir(parents=True, exist_ok=True)
+            (topic_dir / "Topic - Attention Mechanism.md").write_text(
+                "---\ntype: topic\n---\n"
+                "# 主题说明\nAttention overview\n\n"
+                "# 当前结论\nAttention remains important\n",
+                encoding="utf-8",
+            )
+            (lit_dir / "Literature - Attention Survey.md").write_text(
+                "---\ntype: literature\n---\n"
+                "# 核心观点\nAttention improves sequence modeling\n\n"
+                "# 知识连接\n[[Topic - Attention Mechanism]]\n",
+                encoding="utf-8",
+            )
+            (lit_dir / "Literature - Attention Benchmark.md").write_text(
+                "---\ntype: literature\n---\n"
+                "# 核心观点\nAttention benchmark highlights latency tradeoffs\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_PATH),
+                    "--type", "query",
+                    "--query", "attention",
+                    "--details",
+                    "--vault", tmp,
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                cwd=str(REPO_ROOT),
+            )
+            assert result.returncode == 0
+            assert "[Tier 2: Details]" in result.stdout
+            assert "Topic: [[Topic - Attention Mechanism]]" in result.stdout
+            assert "[[Literature - Attention Survey]]" in result.stdout
+            assert "[Orphans]" in result.stdout
+            assert "[[Literature - Attention Benchmark]]" in result.stdout
+
+    def test_organize_mode_outputs_matches_and_suggestion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            topic_dir = Path(tmp) / "03-Knowledge/Topics"
+            lit_dir = Path(tmp) / "03-Knowledge/Literature"
+            inbox_dir = Path(tmp) / "00-Inbox"
+            topic_dir.mkdir(parents=True, exist_ok=True)
+            lit_dir.mkdir(parents=True, exist_ok=True)
+            inbox_dir.mkdir(parents=True, exist_ok=True)
+            (topic_dir / "Topic - Attention Mechanism.md").write_text(
+                "---\ntype: topic\n---\n# 当前结论\nattention summary\n",
+                encoding="utf-8",
+            )
+            (lit_dir / "Literature - Attention Survey.md").write_text(
+                "---\ntype: literature\n---\n# 核心观点\nattention details\n",
+                encoding="utf-8",
+            )
+            (inbox_dir / "Literature - Attention Draft.md").write_text(
+                "---\ntype: literature\nstatus: draft\n---\n# 核心观点\nattention draft\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_PATH),
+                    "--type", "organize",
+                    "--query", "attention",
+                    "--vault", tmp,
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                cwd=str(REPO_ROOT),
+            )
+            assert result.returncode == 0
+            assert "[Organize] attention" in result.stdout
+            assert "[Matches]" in result.stdout
+            assert "[[Literature - Attention Survey]]" in result.stdout
+            assert "[Suggest] Converge into: topic" in result.stdout
+            assert "[Reasons]" in result.stdout
 
     def test_merge_candidates_mode_lists_matches(self):
         with tempfile.TemporaryDirectory() as tmp:

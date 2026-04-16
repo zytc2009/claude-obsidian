@@ -4,9 +4,20 @@ description: Write and organize notes in the Obsidian knowledge base. Handles qu
 
 You are managing the user's local Obsidian vault. The default path is `~/obsidian/`, but check the `OBSIDIAN_VAULT_PATH` environment variable first — the user may have configured a custom path.
 
-## 会话启动：注入活性记忆上下文
+## 会话启动：注入分层记忆上下文
 
-每次被调用时，**首先**运行以下命令获取当前活性记忆：
+每次被调用时，按以下顺序加载记忆上下文：
+
+1. **先看 session memory**：如果 vault 根目录存在 `_session_memory.json`，先读取它，把其中的：
+   - `active_topics`
+   - `active_notes`
+   - `recent_queries`
+   - `rejected_targets`
+   - `open_loops`
+
+   视为当前会话的工作记忆。
+
+2. **再看 activation memory**：运行以下命令获取当前活性记忆：
 
 ```bash
 python ~/.claude/skills/obsidian/memory_manager.py \
@@ -15,7 +26,12 @@ python ~/.claude/skills/obsidian/memory_manager.py \
   --keywords "<关键词>"
 ```
 
-将输出的 `<active_memory>...</active_memory>` 块视为"当前记忆激活状态"，在回答时优先引用这些词对应的知识。
+使用规则：
+
+- 优先参考 `_session_memory.json` 中的当前焦点和本会话拒绝记录
+- 再参考 `<active_memory>...</active_memory>` 中的长期活性记忆
+- 若两者冲突，以 session memory 为准，因为它代表当前会话状态
+- 当 `<active_memory>` 中出现 `Topic - ... (topic, score)` 行时，优先从该 topic 出发组织回答，而不是直接落到零散 literature
 
 **关键词提取规则：** 从用户消息中提取名词、英文大写词、`#标签`、`[[wikilink]]`，过滤停用词（的/是/了/in/the 等）。
 
@@ -358,19 +374,38 @@ python ~/.claude/scripts/obsidian_writer.py \
 
 ## MODE: organize — 搜索、合并、归档
 
+在 `organize` / `query` / topic 归属决策中，检索顺序固定为：
+
+1. session memory 中的 `active_topics` / `active_notes`
+2. activation memory 中的 topic / concept
+3. vault 中的 topic notes
+4. vault 中的 literature / project / concept notes
+
+如果某个 target 在 `_session_memory.json.rejected_targets` 里已经被当前 source note 拒绝过，本次会话中不要再次把它当作优先建议。
+
 **Goal:** 把 vault 中相关笔记整理成一个有结构的 topic 或 MOC。
 
 ### Step O1: 搜索相关笔记
 
-用 Glob 和 Grep 工具在 vault 中搜索：
-- `$OBSIDIAN_VAULT_PATH/03-Knowledge/**/*.md`
-- `$OBSIDIAN_VAULT_PATH/00-Inbox/*.md`
+直接调用 organize CLI：
 
-按关键词搜索标题和内容，列出匹配的笔记文件。
+```bash
+python ~/.claude/scripts/obsidian_writer.py \
+  --type organize \
+  --query "<主题或关键词>"
+```
+
+脚本会：
+
+- 先看 session memory 中的当前 topic / note
+- 再搜索 `03-Knowledge/` 和 `00-Inbox/` 中的相关笔记
+- 输出 `[Session-first]` 和 `[Matches]`
+- 给出 `[Suggest] Converge into: topic|moc`
+- 在没有强 topic 命中时给出 `[Topic suggestion]`
 
 ### Step O2: 展示匹配列表
 
-告知用户找到了哪些相关笔记，让用户确认要合并哪些。
+告知用户找到了哪些相关笔记，让用户确认要整合哪些。
 
 ### Step O3: 读取并合并内容
 
@@ -492,22 +527,24 @@ python ~/.claude/scripts/obsidian_writer.py --type init
 
 ### Step Q1: Tier 1 — 搜索 topic 综述
 
-只在 topic 笔记里搜索：
-```
-$OBSIDIAN_VAULT_PATH/03-Knowledge/Topics/**/*.md
+直接调用查询 CLI：
+
+```bash
+python ~/.claude/scripts/obsidian_writer.py \
+  --type query \
+  --query "<用户问题>"
 ```
 
-用 Grep 匹配用户问题中的关键词，命中后只用 Read 读取每篇 topic 的以下区块：
-- `## 主题说明`
-- `## 当前结论`
-- `## 未解决问题`
+脚本会按以下顺序检索：
 
-基于这些字段给出简答，每个论点标注来源 topic：
+1. session memory
+2. active memory
+3. topic notes
 
-```
-RAG 的核心价值是降低幻觉率，同时不需要重新训练模型 — [[Topic - RAG]]
-当前主流方案是 dense retrieval + reranker — [[Topic - RAG]]
-```
+默认输出 `[Tier 1: Topics]`，只包含 topic 的：
+- `主题说明`
+- `当前结论`
+- `未解决问题`
 
 **如果 Tier 1 有命中，先输出简答，然后询问用户：**
 > "需要看原始资料吗？（说"展开"或"细节"进入详细模式）"
@@ -516,26 +553,21 @@ RAG 的核心价值是降低幻觉率，同时不需要重新训练模型 — [[
 
 ### Step Q2: Tier 2 — drill down（按需）
 
-当用户说"展开"、"细节"、"给我原文"、"原始资料"时，或 Tier 1 无命中时，扩大搜索范围：
-```
-$OBSIDIAN_VAULT_PATH/03-Knowledge/**/*.md
-$OBSIDIAN_VAULT_PATH/02-Projects/**/*.md
-```
+当用户说"展开"、"细节"、"给我原文"、"原始资料"时，或 Tier 1 无命中时，调用：
 
-读取匹配笔记的内容（优先 `核心观点`、`方法要点`、`一句话定义` 区块）。
-
-把结果按所属 topic 分组展示（通过 `## 重要资料` 字段或 backlinks 判断归属）：
-
-```
-Topic: [[Topic - RAG]]
-  [[Literature - Retrieval-Augmented Generation (2020)]] — dense retrieval 原论文，召回精度数据
-  [[Literature - REALM]]                                — 预训练阶段加入检索的方案
-
-未归属片段（考虑整理到主题页）：
-  [[Literature - ColBERT v2]] — 无关联 topic，出现关键词匹配
+```bash
+python ~/.claude/scripts/obsidian_writer.py \
+  --type query \
+  --query "<用户问题>" \
+  --details
 ```
 
-如果 Tier 1 和 Tier 2 都无命中，明确告知："你的笔记里暂无关于 X 的内容。"
+脚本会输出：
+
+- `[Tier 2: Details]`：按 topic 分组的 literature / concept / project 命中
+- `[Orphans]`：无 topic 父节点的命中
+
+如果脚本返回 `[Query] No matches for: ...`，明确告知："你的笔记里暂无关于 X 的内容。"
 
 ### Step Q3: 可选归档
 
@@ -622,7 +654,7 @@ python ~/.claude/scripts/obsidian_writer.py --type topic-scout
 
 ## MODE: memory — 活性记忆管理
 
-**Goal:** 查看、强化或淡忘活性词库中的词条。
+**Goal:** 查看、强化或淡忘活性词库中的词条。注意：这是长期活性记忆，不等于 session memory。
 
 ### 子命令
 

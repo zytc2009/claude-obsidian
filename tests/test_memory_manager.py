@@ -61,6 +61,15 @@ class TestUpsert:
         mm.upsert("CMS", obsidian_link="Literature - CMS论文.md")
         assert mm._long_term["CMS"]["obsidian_links"].count("Literature - CMS论文.md") == 1
 
+    def test_merges_topic_links_without_duplicates(self, vault):
+        mm = MemoryManager(vault)
+        mm.upsert("CMS", topic_links=["Topic - Memory"])
+        mm.upsert("CMS", topic_links=["Topic - Memory", "Topic - Titans"])
+        assert sorted(mm._long_term["CMS"]["topic_links"]) == [
+            "Topic - Memory",
+            "Topic - Titans",
+        ]
+
 class TestSave:
     def test_save_and_reload(self, vault):
         mm = MemoryManager(vault)
@@ -106,6 +115,26 @@ class TestLoadRobustness:
         mm = MemoryManager(vault)
         assert "Good" in mm._long_term
         assert len(mm._long_term) == 1
+
+    def test_loads_legacy_entry_without_topic_links(self, vault):
+        (vault / _MEMORY_FILE).write_text(
+            json.dumps(
+                {
+                    "word": "Legacy",
+                    "aliases": [],
+                    "activation_score": 0.5,
+                    "frequency": 1,
+                    "last_activated": "2026-04-15T10:00:00",
+                    "created": "2026-04-15T10:00:00",
+                    "decay_rate": 0.1,
+                    "obsidian_links": [],
+                },
+                ensure_ascii=False,
+            ) + "\n",
+            encoding="utf-8",
+        )
+        mm = MemoryManager(vault)
+        assert mm._long_term["Legacy"].get("topic_links", []) == []
 
 
 class TestDecay:
@@ -210,6 +239,28 @@ class TestQuery:
         results = mm.query(["记忆", "Titans", "CMS"])
         scores = [mm._current_activation(r) for r in results]
         assert scores == sorted(scores, reverse=True)
+
+    def test_related_entries_can_match_via_shared_topic_links(self, vault):
+        mm = MemoryManager(vault)
+        now = datetime.now().isoformat(timespec="seconds")
+        mm._long_term["Attention"] = {
+            "word": "Attention", "aliases": [],
+            "activation_score": 0.9, "frequency": 3,
+            "last_activated": now, "created": now,
+            "decay_rate": 0.02, "obsidian_links": ["Literature - Attention Survey.md"],
+            "topic_links": ["Topic - Attention Mechanism"],
+        }
+        mm._long_term["FlashAttention"] = {
+            "word": "FlashAttention", "aliases": [],
+            "activation_score": 0.6, "frequency": 2,
+            "last_activated": now, "created": now,
+            "decay_rate": 0.02, "obsidian_links": ["Literature - FlashAttention Survey.md"],
+            "topic_links": ["Topic - Attention Mechanism"],
+        }
+        results = mm.query(["Attention"])
+        words = [r["word"] for r in results]
+        assert "Attention" in words
+        assert "FlashAttention" in words
 
 
 class TestActivate:
@@ -332,6 +383,27 @@ class TestFormatContext:
         ctx = mm.format_context()
         assert ctx.count("●") <= 5
 
+    def test_prefers_topic_lines_when_topic_links_exist(self, vault):
+        mm = MemoryManager(vault)
+        now = datetime.now().isoformat(timespec="seconds")
+        mm._long_term["Attention"] = {
+            "word": "Attention", "aliases": [],
+            "activation_score": 0.9, "frequency": 3,
+            "last_activated": now, "created": now,
+            "decay_rate": 0.02, "obsidian_links": ["Literature - Attention Survey.md"],
+            "topic_links": ["Topic - Attention Mechanism"],
+        }
+        mm._long_term["FlashAttention"] = {
+            "word": "FlashAttention", "aliases": [],
+            "activation_score": 0.6, "frequency": 2,
+            "last_activated": now, "created": now,
+            "decay_rate": 0.02, "obsidian_links": ["Literature - FlashAttention Survey.md"],
+            "topic_links": ["Topic - Attention Mechanism"],
+        }
+        ctx = mm.format_context()
+        assert "● Topic - Attention Mechanism (topic" in ctx
+        assert "from: Attention, FlashAttention" in ctx
+
 
 from skills.obsidian.memory_manager import _extract_keywords
 
@@ -380,7 +452,21 @@ class TestExtractAndUpsert:
         mm = MemoryManager(vault)
         mm.extract_and_upsert("topic", "记忆系统", {"当前结论": "CMS 多频率层优于传统双层记忆"}, "Topic - 记忆系统.md")
         words = list(mm._long_term.keys())
-        assert len(words) > 0
+        assert "记忆系统" in words
+
+    def test_extracts_explicit_topic_links_from_fields(self, vault):
+        mm = MemoryManager(vault)
+        mm.extract_and_upsert(
+            "literature",
+            "Attention Survey",
+            {
+                "核心观点": "Attention improves sequence modeling",
+                "知识连接": "[[Topic - Attention Mechanism]]\n[[Concept - Transformer]]",
+            },
+            "Literature - Attention Survey.md",
+        )
+        entry = next(iter(mm._long_term.values()))
+        assert entry["topic_links"] == ["Topic - Attention Mechanism"]
 
     def test_skips_unsupported_note_types(self, vault):
         mm = MemoryManager(vault)

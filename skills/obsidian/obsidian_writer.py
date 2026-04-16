@@ -23,6 +23,14 @@ import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+try:
+    from .session_memory import SessionMemory
+except ImportError:
+    try:
+        from session_memory import SessionMemory
+    except ImportError:  # pragma: no cover - optional integration fallback
+        SessionMemory = None  # type: ignore[assignment]
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -56,6 +64,127 @@ NOTE_CONFIG = {
         "required": [],
     },
 }
+
+
+def _safe_session_memory(vault: Path):
+    """Return a session-memory instance when available, otherwise None."""
+    if SessionMemory is None:
+        return None
+    try:
+        return SessionMemory(vault, persist=True)
+    except Exception:
+        return None
+
+
+def _session_rejected_targets(vault: Path, source_note: str) -> set[str]:
+    """Return targets rejected in the current session for a given source note."""
+    session = _safe_session_memory(vault)
+    if session is None:
+        return set()
+    try:
+        rejected = session.to_dict().get("rejected_targets", {}).get(source_note, [])
+    except Exception:
+        return set()
+    return {str(item).strip() for item in rejected if str(item).strip()}
+
+
+def _record_session_note(vault: Path, note_type: str, filepath: Path) -> None:
+    """Update session memory for an explicit note write or update."""
+    session = _safe_session_memory(vault)
+    if session is None:
+        return
+    try:
+        session.add_note(filepath.name)
+        if note_type == "topic" or "Topics" in filepath.parts:
+            session.add_topic(filepath.stem)
+    except Exception:
+        return
+
+
+def record_session_query(vault: Path, query_text: str) -> None:
+    """Persist a user query into session memory."""
+    session = _safe_session_memory(vault)
+    if session is None:
+        return
+    try:
+        session.add_query(query_text)
+    except Exception:
+        return
+
+
+def _resolve_session_note_refs(vault: Path, names: list[str]) -> list[Path]:
+    """Resolve session note/topic names to concrete vault paths when they exist."""
+    resolved: list[Path] = []
+    seen: set[Path] = set()
+    for name in names:
+        label = str(name).strip()
+        if not label:
+            continue
+        path = vault / label if label.endswith(".md") else None
+        if path is not None and path.exists():
+            if path not in seen:
+                resolved.append(path)
+                seen.add(path)
+            continue
+        pattern = label if label.endswith(".md") else f"{label}.md"
+        matches = list(vault.rglob(pattern))
+        for match in matches:
+            if match not in seen:
+                resolved.append(match)
+                seen.add(match)
+    return resolved
+
+
+def find_session_relevant_notes(vault: Path, query_text: str = "", limit: int = 5) -> list[Path]:
+    """Return current-session notes/topics ranked ahead of wider vault fallback.
+
+    Ranking signals:
+    - active topics before active notes
+    - lexical overlap with the current query
+    - recency within the session lists
+    """
+    session = _safe_session_memory(vault)
+    if session is None:
+        return []
+
+    try:
+        state = session.to_dict()
+    except Exception:
+        return []
+
+    active_topics = list(state.get("active_topics", []))
+    active_notes = list(state.get("active_notes", []))
+    query_words = {word.lower() for word in _suggestion_keywords_from_stem(query_text)}
+
+    candidates: list[tuple[int, int, Path]] = []
+    seen: set[Path] = set()
+
+    for idx, path in enumerate(_resolve_session_note_refs(vault, active_topics)):
+        if path in seen:
+            continue
+        score = 100 - idx
+        stem_words = {word.lower() for word in _suggestion_keywords_from_stem(path.stem)}
+        overlap = len(query_words & stem_words)
+        score += overlap * 50
+        if query_words and overlap == 0:
+            score -= 60
+        candidates.append((score, idx, path))
+        seen.add(path)
+
+    for idx, path in enumerate(_resolve_session_note_refs(vault, active_notes)):
+        if path in seen:
+            continue
+        score = 50 - idx
+        stem_words = {word.lower() for word in _suggestion_keywords_from_stem(path.stem)}
+        overlap = len(query_words & stem_words)
+        score += overlap * 50
+        if query_words and overlap == 0:
+            score -= 30
+        candidates.append((score, idx, path))
+        seen.add(path)
+
+    candidates.sort(key=lambda item: (-item[0], item[1], str(item[2])))
+    return [path for _, _, path in candidates[:limit]]
 
 # ---------------------------------------------------------------------------
 # Routing utilities
@@ -382,6 +511,7 @@ def write_note(
 
     content = RENDERERS[note_type](title, fields, is_draft)
     filepath.write_text(content, encoding="utf-8")
+    _record_session_note(vault, note_type, filepath)
 
     # Incrementally update _index.md (skip drafts — they live in Inbox)
     if not is_draft:
@@ -575,6 +705,7 @@ def suggest_links(vault: Path, new_note_path: Path) -> list:
         return []
 
     feedback_adjustments = _load_feedback_adjustments(vault, "link", stem)
+    session_rejections = _session_rejected_targets(vault, stem)
     candidates = []
     search_plan = [
         ("03-Knowledge/Topics", 2, "# 相关项目" if new_note_path.stem.startswith("Project - ") else "# 重要资料"),
@@ -605,6 +736,8 @@ def suggest_links(vault: Path, new_note_path: Path) -> list:
             raw_score = base_score + title_matches * 2 + body_matches
             penalty_meta = feedback_adjustments.get(md_file.stem, {})
             penalty = penalty_meta.get("reject", 0) * 3 + penalty_meta.get("modify-accept", 0)
+            if md_file.stem in session_rejections:
+                penalty += 4
             score = raw_score - penalty
             if score <= base_score:
                 continue
@@ -620,6 +753,8 @@ def suggest_links(vault: Path, new_note_path: Path) -> list:
                 reason_parts.append(
                     f"feedback=modify-acceptx{penalty_meta['modify-accept']}"
                 )
+            if md_file.stem in session_rejections:
+                reason_parts.append("session=reject")
             reason = "; ".join(reason_parts)
             candidates.append((score, md_file.relative_to(vault), f"{section}; {reason}"))
 
@@ -1125,6 +1260,13 @@ def append_suggestion_feedback(
     }
     events_path = vault / _EVENTS_FILE
     append_jsonl_events(events_path, [event])
+    session = _safe_session_memory(vault)
+    if session is not None and action in {"reject", "modify-accept"}:
+        for target in normalized_targets:
+            try:
+                session.reject_target(source_note, target)
+            except Exception:
+                break
 
     details = [
         f"Suggestion type: {suggestion_type}",
@@ -1419,6 +1561,7 @@ def run_ingest_sync(vault: Path, target_path: Path, plan: dict) -> dict:
     if primary_changes:
         touch_updated(target_path)
         primary_changes.append(f"Updated date: {_today_str()}")
+        _record_session_note(vault, "topic" if "Topics" in target_path.parts else "note", target_path)
     summary["primary_updates"] = primary_changes
 
     for cascade in plan.get("cascade_updates") or []:
@@ -1441,6 +1584,7 @@ def run_ingest_sync(vault: Path, target_path: Path, plan: dict) -> dict:
         if cascade_changes:
             touch_updated(cascade_target)
             cascade_changes.append(f"Updated date: {_today_str()}")
+            _record_session_note(vault, "topic", cascade_target)
         if cascade_changes:
             summary["cascade_updates"].append(
                 {"target": str(cascade_target.relative_to(vault)), "details": cascade_changes}
@@ -1472,6 +1616,7 @@ def run_ingest_sync(vault: Path, target_path: Path, plan: dict) -> dict:
             touch_updated(conflict_target)
             details.insert(0, "Conflict added")
             details.append(f"Updated date: {_today_str()}")
+            _record_session_note(vault, "topic" if "Topics" in conflict_target.parts else "note", conflict_target)
         else:
             details.insert(0, "Conflict already present")
         summary["conflicts"].append(
@@ -1634,6 +1779,295 @@ def _extract_wikilinks(text: str) -> set:
     """Return all wikilink targets from text, stripping heading anchors."""
     pattern = r"\[\[([^\]|#]+)(?:[#|][^\]]*)?\]\]"
     return {m.group(1).strip() for m in re.finditer(pattern, text)}
+
+
+def _extract_section(text: str, title: str) -> str:
+    """Extract a top-level markdown section body by heading title."""
+    pattern = rf"(?ms)^# {re.escape(title)}\n(.*?)(?=^# |\Z)"
+    match = re.search(pattern, text)
+    if not match:
+        return ""
+    return match.group(1).strip()
+
+
+def _query_keywords(query_text: str) -> list[str]:
+    """Return meaningful query keywords shared across retrieval helpers."""
+    keywords = _suggestion_keywords_from_stem(query_text)
+    if keywords:
+        return keywords
+    return [part for part in re.split(r"[\s\-_]+", query_text) if len(part) >= 2]
+
+
+def _topic_summary_payload(note_path: Path, text: str) -> dict:
+    """Build the Tier 1 payload for a topic note."""
+    return {
+        "path": note_path,
+        "title": note_path.stem,
+        "主题说明": _extract_section(text, "主题说明"),
+        "当前结论": _extract_section(text, "当前结论"),
+        "未解决问题": _extract_section(text, "未解决问题"),
+    }
+
+
+def query_vault(vault: Path, query_text: str, include_details: bool = False, limit: int = 5) -> dict:
+    """Query the vault with session-first, topic-first retrieval.
+
+    Returns a structured payload:
+    {
+      "tier1_topics": [topic summary dicts],
+      "tier2_grouped": [{"topic": "...", "notes": [..]}],
+      "orphans": [note dicts],
+    }
+    """
+    record_session_query(vault, query_text)
+    keywords = [kw.lower() for kw in _query_keywords(query_text)]
+    topic_dir = vault / "03-Knowledge" / "Topics"
+    topic_payloads: list[tuple[int, dict]] = []
+    seen_topics: set[Path] = set()
+
+    for session_path in find_session_relevant_notes(vault, query_text, limit=limit):
+        if session_path.parent != topic_dir:
+            continue
+        try:
+            text = session_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        haystack = " ".join(
+            filter(
+                None,
+                [
+                    session_path.stem.lower(),
+                    _extract_section(text, "主题说明").lower(),
+                    _extract_section(text, "当前结论").lower(),
+                    _extract_section(text, "未解决问题").lower(),
+                ],
+            )
+        )
+        overlap = sum(1 for kw in keywords if kw in haystack)
+        if keywords and overlap == 0:
+            continue
+        topic_payloads.append((100 + overlap * 10, _topic_summary_payload(session_path, text)))
+        seen_topics.add(session_path)
+
+    if topic_dir.exists():
+        for topic_path in topic_dir.glob("*.md"):
+            if topic_path in seen_topics:
+                continue
+            try:
+                text = topic_path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            haystack = " ".join(
+                filter(
+                    None,
+                    [
+                        topic_path.stem.lower(),
+                        _extract_section(text, "主题说明").lower(),
+                        _extract_section(text, "当前结论").lower(),
+                        _extract_section(text, "未解决问题").lower(),
+                    ],
+                )
+            )
+            overlap = sum(1 for kw in keywords if kw in haystack)
+            if keywords and overlap == 0:
+                continue
+            topic_payloads.append((overlap * 10, _topic_summary_payload(topic_path, text)))
+
+    topic_payloads.sort(key=lambda item: (-item[0], item[1]["title"]))
+    tier1_topics = [payload for _, payload in topic_payloads[:limit]]
+    if tier1_topics and not include_details:
+        for item in tier1_topics:
+            _record_session_note(vault, "topic", item["path"])
+        return {"tier1_topics": tier1_topics, "tier2_grouped": [], "orphans": []}
+
+    detail_dirs = [
+        vault / "03-Knowledge" / "Literature",
+        vault / "03-Knowledge" / "Concepts",
+        vault / "02-Projects",
+    ]
+    grouped: dict[str, list[dict]] = {}
+    orphans: list[dict] = []
+    topic_titles = {item["title"] for item in tier1_topics}
+
+    for detail_dir in detail_dirs:
+        if not detail_dir.exists():
+            continue
+        for note_path in detail_dir.glob("*.md"):
+            try:
+                text = note_path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            haystack = text.lower()
+            overlap = sum(1 for kw in keywords if kw in note_path.stem.lower() or kw in haystack)
+            if keywords and overlap == 0:
+                continue
+
+            note_item = {
+                "path": note_path,
+                "title": note_path.stem,
+                "excerpt": (
+                    _extract_section(text, "核心观点")
+                    or _extract_section(text, "方法要点")
+                    or _extract_section(text, "一句话定义")
+                    or _extract_section(text, "项目描述")
+                )[:200],
+            }
+            links = _extract_wikilinks(text)
+            parent_topics = sorted(link for link in links if link.startswith("Topic - "))
+            if not parent_topics:
+                orphans.append(note_item)
+                continue
+            matched_parent = next((topic for topic in parent_topics if topic in topic_titles), parent_topics[0])
+            grouped.setdefault(matched_parent, []).append(note_item)
+
+    tier2_grouped = [
+        {"topic": topic, "notes": notes[:limit]}
+        for topic, notes in sorted(grouped.items(), key=lambda item: item[0])
+    ]
+    for item in tier1_topics:
+        _record_session_note(vault, "topic", item["path"])
+    for group in tier2_grouped:
+        for note in group["notes"]:
+            _record_session_note(vault, "note", note["path"])
+    for note in orphans[:limit]:
+        _record_session_note(vault, "note", note["path"])
+    return {
+        "tier1_topics": tier1_topics,
+        "tier2_grouped": tier2_grouped,
+        "orphans": orphans[:limit],
+    }
+
+
+def organize_vault(vault: Path, query_text: str, limit: int = 10) -> dict:
+    """Return a session-first organization view for related notes.
+
+    The result is intended to drive `/obsidian organize` style workflows:
+    - surface current-session notes first
+    - find related notes across knowledge + inbox
+    - suggest whether the result should converge into a topic or a MOC
+    """
+    record_session_query(vault, query_text)
+    keywords = [kw.lower() for kw in _query_keywords(query_text)]
+    session_hits = find_session_relevant_notes(vault, query_text, limit=min(limit, 5))
+    candidate_dirs = [
+        vault / "03-Knowledge",
+        vault / "00-Inbox",
+    ]
+    matches: list[tuple[int, dict]] = []
+    seen_paths = {path.resolve() for path in session_hits}
+
+    for root in candidate_dirs:
+        if not root.exists():
+            continue
+        for note_path in root.rglob("*.md"):
+            try:
+                text = note_path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            overlap = sum(
+                1 for kw in keywords
+                if kw in note_path.stem.lower() or kw in text.lower()
+            )
+            if keywords and overlap == 0:
+                continue
+            rel = note_path.relative_to(vault)
+            note_type = _parse_frontmatter(text).get("type", "")
+            parent_topics = sorted(link for link in _extract_wikilinks(text) if link.startswith("Topic - "))
+            note_item = {
+                "path": note_path,
+                "title": note_path.stem,
+                "relative_path": str(rel),
+                "type": note_type,
+                "excerpt": (
+                    _extract_section(text, "当前结论")
+                    or _extract_section(text, "核心观点")
+                    or _extract_section(text, "一句话定义")
+                    or _extract_section(text, "项目描述")
+                )[:200],
+                "in_session": note_path.resolve() in seen_paths,
+                "in_inbox": rel.parts[0] == "00-Inbox",
+                "parent_topics": parent_topics,
+            }
+            base = 100 if note_item["in_session"] else 0
+            if note_type == "topic":
+                base += 20
+            matches.append((base + overlap * 10, note_item))
+
+    matches.sort(key=lambda item: (-item[0], item[1]["relative_path"]))
+    selected = [item for _, item in matches[:limit]]
+
+    topic_match_count = sum(1 for item in selected if item["type"] == "topic")
+    source_match_count = sum(
+        1 for item in selected if item["type"] in {"literature", "concept", "project"}
+    )
+    orphan_match_count = sum(
+        1 for item in selected
+        if item["type"] in {"literature", "concept", "project"} and not item["parent_topics"]
+    )
+    inbox_match_count = sum(1 for item in selected if item["in_inbox"])
+    session_match_count = sum(1 for item in selected if item["in_session"])
+
+    reasons: list[str] = []
+    topic_score = 0
+    moc_score = 0
+
+    if topic_match_count:
+        topic_score += 3
+        reasons.append(f"{topic_match_count} existing topic match(es) found")
+    if orphan_match_count >= 2:
+        topic_score += 3
+        reasons.append(f"{orphan_match_count} orphan source note(s) suggest fragmentation")
+    elif orphan_match_count == 1:
+        topic_score += 1
+        reasons.append("1 orphan source note may need a clearer topic home")
+    if session_match_count:
+        topic_score += 2
+        reasons.append(f"{session_match_count} match(es) are active in the current session")
+    if inbox_match_count:
+        topic_score += 1
+        reasons.append(f"{inbox_match_count} inbox note(s) are waiting to be organized")
+    if source_match_count >= 2:
+        topic_score += 1
+        reasons.append(f"{source_match_count} source note(s) share the current subject")
+
+    if topic_match_count == 0 and len(selected) <= 1:
+        moc_score += 3
+        reasons.append("only a shallow cluster was found")
+    if topic_match_count == 0 and orphan_match_count == 0 and source_match_count <= 1:
+        moc_score += 2
+        reasons.append("no strong topic-level synthesis target exists yet")
+    if len(selected) == 1:
+        moc_score += 1
+
+    if not selected:
+        suggestion = "none"
+        confidence = "low"
+        reasons = ["no related notes found"]
+    else:
+        suggestion = "topic" if topic_score >= moc_score else "moc"
+        score_gap = abs(topic_score - moc_score)
+        if score_gap >= 3:
+            confidence = "high"
+        elif score_gap >= 1:
+            confidence = "medium"
+        else:
+            confidence = "low"
+
+    synthetic_path = Path(f"03-Knowledge/Literature/Literature - {query_text}.md")
+    link_suggestions = suggest_links(vault, vault / synthetic_path)
+    new_topic_hint = suggest_new_topic(synthetic_path, link_suggestions)
+
+    for item in selected:
+        _record_session_note(vault, "topic" if item["type"] == "topic" else "note", item["path"])
+
+    return {
+        "session_hits": session_hits,
+        "matches": selected,
+        "suggested_output": suggestion,
+        "confidence": confidence,
+        "reasons": reasons,
+        "new_topic_hint": new_topic_hint,
+    }
 
 
 def _fix_frontmatter(text: str, path: Path, fm: dict) -> tuple:
@@ -1898,7 +2332,7 @@ def parse_args(argv=None):
     parser.add_argument(
         "--type",
         required=True,
-        choices=list(NOTE_CONFIG.keys()) + ["fleeting", "init", "lint", "index", "merge-candidates", "merge-update", "cascade-candidates", "cascade-update", "conflict-update", "ingest-sync", "suggestion-feedback", "topic-scout"],
+        choices=list(NOTE_CONFIG.keys()) + ["fleeting", "init", "lint", "index", "query", "organize", "merge-candidates", "merge-update", "cascade-candidates", "cascade-update", "conflict-update", "ingest-sync", "suggestion-feedback", "topic-scout"],
         help="Note type",
     )
     parser.add_argument(
@@ -1973,6 +2407,16 @@ def parse_args(argv=None):
         action="store_true",
         help="Print rendered content without writing to disk",
     )
+    parser.add_argument(
+        "--query",
+        default="",
+        help="Query text for --type query",
+    )
+    parser.add_argument(
+        "--details",
+        action="store_true",
+        help="Include Tier 2 drill-down details for --type query",
+    )
     return parser.parse_args(argv)
 
 
@@ -2009,6 +2453,87 @@ def main(argv=None):
     if note_type == "index":
         index_path = rebuild_index(vault)
         print(f"[OK] Index rebuilt: {index_path.relative_to(vault)}")
+        return
+
+    # --- Query: special case ---
+    if note_type == "query":
+        query_text = args.query.strip() or args.title.strip() or str(fields.get("query", "")).strip()
+        if not query_text:
+            print("Error: --query is required for query", file=sys.stderr)
+            sys.exit(1)
+        result = query_vault(vault, query_text, include_details=args.details)
+        tier1_topics = result["tier1_topics"]
+        tier2_grouped = result["tier2_grouped"]
+        orphans = result["orphans"]
+
+        if not tier1_topics and not tier2_grouped and not orphans:
+            print(f"[Query] No matches for: {query_text}")
+            return
+
+        print(f"[Query] {query_text}")
+        if tier1_topics:
+            print("\n[Tier 1: Topics]")
+            for item in tier1_topics:
+                print(f"  [[{item['title']}]]")
+                if item["主题说明"]:
+                    print(f"    主题说明: {item['主题说明']}")
+                if item["当前结论"]:
+                    print(f"    当前结论: {item['当前结论']}")
+                if item["未解决问题"]:
+                    print(f"    未解决问题: {item['未解决问题']}")
+            if not args.details:
+                print('\n[Hint] Use --details to include drill-down notes.')
+
+        if tier2_grouped:
+            print("\n[Tier 2: Details]")
+            for group in tier2_grouped:
+                print(f"  Topic: [[{group['topic']}]]")
+                for note in group["notes"]:
+                    excerpt = f" — {note['excerpt']}" if note["excerpt"] else ""
+                    print(f"    [[{note['title']}]]{excerpt}")
+
+        if orphans:
+            print("\n[Orphans]")
+            for note in orphans:
+                excerpt = f" — {note['excerpt']}" if note["excerpt"] else ""
+                print(f"  [[{note['title']}]]{excerpt}")
+        return
+
+    if note_type == "organize":
+        query_text = args.query.strip() or args.title.strip() or str(fields.get("query", "")).strip()
+        if not query_text:
+            print("Error: --query is required for organize", file=sys.stderr)
+            sys.exit(1)
+        result = organize_vault(vault, query_text)
+        matches = result["matches"]
+        if not matches:
+            print(f"[Organize] No related notes found for: {query_text}")
+            return
+        print(f"[Organize] {query_text}")
+        if result["session_hits"]:
+            print("\n[Session-first]")
+            for path in result["session_hits"]:
+                print(f"  [[{path.stem}]]")
+        print("\n[Matches]")
+        for item in matches:
+            markers = []
+            if item["in_session"]:
+                markers.append("session")
+            if item["in_inbox"]:
+                markers.append("inbox")
+            marker_text = f" ({', '.join(markers)})" if markers else ""
+            excerpt = f" — {item['excerpt']}" if item["excerpt"] else ""
+            print(f"  [[{item['title']}]]{marker_text}{excerpt}")
+        print(
+            f"\n[Suggest] Converge into: {result['suggested_output']} "
+            f"(confidence={result['confidence']})"
+        )
+        if result["reasons"]:
+            print("[Reasons]")
+            for reason in result["reasons"]:
+                print(f"  - {reason}")
+        if result["new_topic_hint"]:
+            print(f"[Topic suggestion] {result['new_topic_hint']}")
         return
 
     if note_type == "merge-candidates":

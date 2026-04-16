@@ -47,6 +47,19 @@ def _extract_keywords(text: str) -> list:
     return [w for w in all_words if _is_meaningful(w)]
 
 
+def _extract_topic_links(fields: dict) -> list[str]:
+    """Extract explicit topic wikilinks from note fields."""
+    topic_links: list[str] = []
+    for value in fields.values():
+        if not isinstance(value, str):
+            continue
+        for match in re.findall(r"\[\[([^\]]+)\]\]", value):
+            target = match.split("|")[0].split("#")[0].strip()
+            if target.startswith("Topic - ") and target not in topic_links:
+                topic_links.append(target)
+    return topic_links
+
+
 class MemoryManager:
     def __init__(self, vault: Path):
         self.vault = vault
@@ -82,7 +95,13 @@ class MemoryManager:
         freq_bonus = math.log(entry["frequency"] + 1) * 0.1
         return min(1.0, base + freq_bonus)
 
-    def upsert(self, word: str, aliases: list = None, obsidian_link: str = None):
+    def upsert(
+        self,
+        word: str,
+        aliases: list = None,
+        obsidian_link: str = None,
+        topic_links: list[str] | None = None,
+    ):
         """新增或更新长期记忆中的词条。"""
         if word in self._long_term:
             entry = dict(self._long_term[word])
@@ -96,6 +115,9 @@ class MemoryManager:
                 if obsidian_link not in links:
                     links.append(obsidian_link)
                 entry["obsidian_links"] = links
+            if topic_links:
+                existing_topics = set(entry.get("topic_links", []))
+                entry["topic_links"] = list(existing_topics | set(topic_links))
         else:
             now = datetime.now().isoformat(timespec="seconds")
             entry = {
@@ -107,6 +129,7 @@ class MemoryManager:
                 "created": now,
                 "decay_rate": _INITIAL_DECAY_RATE,
                 "obsidian_links": [obsidian_link] if obsidian_link else [],
+                "topic_links": list(dict.fromkeys(topic_links or [])),
             }
         self._long_term[word] = entry
 
@@ -150,14 +173,16 @@ class MemoryManager:
                         matched.add(word)
                         break
 
-        # 同 obsidian_link 的关联词
+        # 同 obsidian_link 或 topic_link 的关联词
         matched_links = set()
         for word in matched:
             links = set(self._long_term[word].get("obsidian_links", []))
+            topics = set(self._long_term[word].get("topic_links", []))
             for other_word, other_entry in self._long_term.items():
                 if other_word not in matched:
                     other_links = set(other_entry.get("obsidian_links", []))
-                    if links & other_links:
+                    other_topics = set(other_entry.get("topic_links", []))
+                    if (links & other_links) or (topics & other_topics):
                         matched_links.add(other_word)
 
         all_matched = matched | matched_links
@@ -197,7 +222,37 @@ class MemoryManager:
         if not top:
             return ""
         lines = ["<active_memory>"]
+        rendered_words = set()
+        topic_meta: dict[str, dict[str, object]] = {}
         for entry in top:
+            score = self._current_activation(entry)
+            for topic in entry.get("topic_links", []):
+                meta = topic_meta.setdefault(topic, {"score": 0.0, "sources": []})
+                meta["score"] = max(float(meta["score"]), score)
+                sources = meta["sources"]
+                if isinstance(sources, list) and entry["word"] not in sources:
+                    sources.append(entry["word"])
+
+        topic_items = sorted(
+            topic_meta.items(),
+            key=lambda item: (-float(item[1]["score"]), item[0]),
+        )
+        bullet_count = 0
+        for topic, meta in topic_items:
+            if bullet_count >= 5:
+                break
+            lines.append(f"● {topic} (topic, {float(meta['score']):.2f})")
+            sources = list(meta.get("sources", []))[:3]
+            if sources:
+                lines.append(f"  from: {', '.join(sources)}")
+                rendered_words.update(sources)
+            bullet_count += 1
+
+        for entry in top:
+            if bullet_count >= 5:
+                break
+            if entry["word"] in rendered_words:
+                continue
             score = self._current_activation(entry)
             aliases_str = ", ".join(entry.get("aliases", []))
             line = f"● {entry['word']} ({score:.2f})"
@@ -207,6 +262,7 @@ class MemoryManager:
             if links:
                 line += f"\n  → [[{links[0]}]]"
             lines.append(line)
+            bullet_count += 1
         lines.append("</active_memory>")
         return "\n".join(lines)
 
@@ -229,15 +285,19 @@ class MemoryManager:
 
     def extract_and_upsert(self, note_type: str, title: str, fields: dict, note_filename: str):
         """从笔记字段提取关键词并写入记忆库。写笔记后自动调用。"""
+        topic_links = _extract_topic_links(fields)
         if note_type == "concept":
             aliases = _extract_keywords(fields.get("一句话定义", ""))
-            self.upsert(title, aliases=aliases, obsidian_link=note_filename)
+            self.upsert(title, aliases=aliases, obsidian_link=note_filename, topic_links=topic_links)
         elif note_type == "literature":
             for kw in _extract_keywords(fields.get("核心观点", "")):
-                self.upsert(kw, obsidian_link=note_filename)
+                self.upsert(kw, obsidian_link=note_filename, topic_links=topic_links)
         elif note_type == "topic":
-            for kw in _extract_keywords(fields.get("当前结论", "")):
-                self.upsert(kw, obsidian_link=note_filename)
+            keywords = _extract_keywords(fields.get("当前结论", ""))
+            topic_ref = [Path(note_filename).stem]
+            self.upsert(title, aliases=keywords, obsidian_link=note_filename, topic_links=topic_ref)
+            for kw in keywords:
+                self.upsert(kw, obsidian_link=note_filename, topic_links=topic_ref)
         # moc / project / fleeting 暂不提取
 
 
