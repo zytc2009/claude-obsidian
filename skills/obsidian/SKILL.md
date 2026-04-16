@@ -4,6 +4,23 @@ description: Write and organize notes in the Obsidian knowledge base. Handles qu
 
 You are managing the user's local Obsidian vault. The default path is `~/obsidian/`, but check the `OBSIDIAN_VAULT_PATH` environment variable first — the user may have configured a custom path.
 
+## 会话启动：注入活性记忆上下文
+
+每次被调用时，**首先**运行以下命令获取当前活性记忆：
+
+```bash
+python ~/.claude/skills/obsidian/memory_manager.py \
+  --vault "${OBSIDIAN_VAULT_PATH:-~/obsidian}" \
+  --mode query \
+  --keywords "<关键词>"
+```
+
+将输出的 `<active_memory>...</active_memory>` 块视为"当前记忆激活状态"，在回答时优先引用这些词对应的知识。
+
+**关键词提取规则：** 从用户消息中提取名词、英文大写词、`#标签`、`[[wikilink]]`，过滤停用词（的/是/了/in/the 等）。
+
+---
+
 ## Step 1: Detect Operation Mode
 
 | User says | Mode |
@@ -18,6 +35,7 @@ You are managing the user's local Obsidian vault. The default path is `~/obsidia
 | 在笔记里查, 知识库搜索, query, 我笔记里有关…的内容 | `query` |
 | 重建索引, 更新 index, 生成目录, rebuild index | `index` |
 | 找孤儿笔记, 聚类整理, 批量建主题, topic scout | `topic-scout` |
+| memory, 记忆状态, 活性词, 强化, 淡忘 | `memory` |
 
 If still unclear, ask: "你想做什么？fleeting（速记）/ capture（抓取网页/文件）/ log（整理对话）/ organize（归档整理）/ write（写笔记）/ query（知识库问答）/ lint（健康检查）/ init（初始化目录）"
 
@@ -599,6 +617,53 @@ python ~/.claude/scripts/obsidian_writer.py --type topic-scout
 3. 可选：在每篇 cluster 成员笔记里反向添加 `[[Topic - 新名]]` 链接（询问用户后执行）
 
 **运行频率：** 按需触发，不自动运行。建议在 `lint` 发现大量孤儿后手动跑。
+
+---
+
+## MODE: memory — 活性记忆管理
+
+**Goal:** 查看、强化或淡忘活性词库中的词条。
+
+### 子命令
+
+| 用户说 | 操作 |
+|--------|------|
+| `/obsidian memory` 或 "记忆状态" | 显示 top-20 活性词 |
+| `/obsidian memory reinforce <词>` 或 "强化 <词>" | 手动提升激活分数 |
+| `/obsidian memory forget <词>` 或 "淡忘 <词>" | 从活性库中删除 |
+| `/obsidian memory decay` 或 "运行衰减" | 立即执行衰减周期 |
+
+### 执行命令
+
+**显示状态：**
+```bash
+python ~/.claude/skills/obsidian/memory_manager.py \
+  --vault "${OBSIDIAN_VAULT_PATH:-~/obsidian}" \
+  --mode status
+```
+
+**强化词条：**
+```bash
+python ~/.claude/skills/obsidian/memory_manager.py \
+  --vault "${OBSIDIAN_VAULT_PATH:-~/obsidian}" \
+  --mode reinforce \
+  --word "<词>"
+```
+
+**淡忘词条：**
+```bash
+python ~/.claude/skills/obsidian/memory_manager.py \
+  --vault "${OBSIDIAN_VAULT_PATH:-~/obsidian}" \
+  --mode forget \
+  --word "<词>"
+```
+
+**运行衰减：**
+```bash
+python ~/.claude/skills/obsidian/memory_manager.py \
+  --vault "${OBSIDIAN_VAULT_PATH:-~/obsidian}" \
+  --mode decay
+```
 
 ---
 
