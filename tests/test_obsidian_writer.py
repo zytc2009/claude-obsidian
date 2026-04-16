@@ -450,6 +450,23 @@ class TestSuggestionFeedback:
             assert "Suggestion type: link" in log_text
             assert "Action: reject" in log_text
 
+    def test_append_suggestion_feedback_normalizes_path_targets_to_stems(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            events_path = append_suggestion_feedback(
+                vault,
+                suggestion_type="link",
+                action="reject",
+                source_note="Literature - Attention Survey",
+                target_notes=["03-Knowledge/Topics/Topic - Attention.md"],
+            )
+
+            events = [
+                json.loads(line)
+                for line in events_path.read_text(encoding="utf-8").splitlines()
+            ]
+            assert events[0]["target_notes"] == ["Topic - Attention"]
+
 
 class TestSupportingSections:
     def test_add_supporting_note_creates_section(self):
@@ -1487,6 +1504,32 @@ class TestCLI:
             assert events[0]["target_notes"] == ["Topic - Attention", "MOC - Transformers"]
             log_text = (Path(tmp) / _LOG_FILE).read_text(encoding="utf-8")
             assert "suggestion-feedback | Literature - Attention Survey" in log_text
+
+    def test_suggestion_feedback_mode_normalizes_path_targets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_PATH),
+                    "--type", "suggestion-feedback",
+                    "--vault", tmp,
+                    "--suggestion-type", "link",
+                    "--feedback-action", "reject",
+                    "--source-note", "Literature - Attention Survey",
+                    "--targets", "03-Knowledge/Topics/Topic - Attention.md",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                cwd=str(REPO_ROOT),
+            )
+            assert result.returncode == 0
+            events = [
+                json.loads(line)
+                for line in (Path(tmp) / _EVENTS_FILE).read_text(encoding="utf-8").splitlines()
+            ]
+            assert events[0]["target_notes"] == ["Topic - Attention"]
+            assert "Targets: Topic - Attention" in result.stdout
 
     def test_ingest_sync_mode_runs_full_update_plan(self):
         with tempfile.TemporaryDirectory() as tmp:

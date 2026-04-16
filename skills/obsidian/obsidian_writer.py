@@ -540,7 +540,7 @@ def _load_feedback_adjustments(
                 if action not in {"reject", "modify-accept"}:
                     continue
                 for target in event.get("target_notes", []):
-                    target_name = str(target).strip()
+                    target_name = _normalize_feedback_target(target)
                     if not target_name:
                         continue
                     target_adjustments = adjustments.setdefault(
@@ -550,6 +550,15 @@ def _load_feedback_adjustments(
     except OSError:
         return {}
     return adjustments
+
+
+def _normalize_feedback_target(target: str) -> str:
+    """Normalize feedback targets to note stems so hints and scoring share one key."""
+    target_name = str(target).strip()
+    if not target_name:
+        return ""
+    target_path = Path(target_name)
+    return target_path.stem.strip() or target_name
 
 
 def suggest_links(vault: Path, new_note_path: Path) -> list:
@@ -1099,12 +1108,18 @@ def append_suggestion_feedback(
     reason: str = "",
 ) -> Path:
     """Append a structured suggestion-feedback event and mirror it to the log."""
+    normalized_targets = []
+    for target in target_notes:
+        normalized = _normalize_feedback_target(target)
+        if normalized:
+            normalized_targets.append(normalized)
+
     event = {
         "ts": datetime.now().isoformat(timespec="seconds"),
         "event_type": "suggestion_feedback",
         "suggestion_type": suggestion_type,
         "source_note": source_note,
-        "target_notes": target_notes,
+        "target_notes": normalized_targets,
         "action": action,
         "reason": reason,
     }
@@ -1114,7 +1129,7 @@ def append_suggestion_feedback(
     details = [
         f"Suggestion type: {suggestion_type}",
         f"Action: {action}",
-        f"Targets: {', '.join(target_notes) if target_notes else '(none)'}",
+        f"Targets: {', '.join(normalized_targets) if normalized_targets else '(none)'}",
     ]
     if reason:
         details.append(f"Reason: {reason}")
@@ -1165,7 +1180,12 @@ def _print_feedback_hint(
         return
 
     script = Path(__file__).resolve()
-    joined_targets = ",".join(targets)
+    normalized_targets = []
+    for target in targets:
+        normalized = _normalize_feedback_target(target)
+        if normalized:
+            normalized_targets.append(normalized)
+    joined_targets = ",".join(normalized_targets)
     print("\n[Feedback hint]")
     print("  Record a rejection or modified acceptance with:")
     print(
@@ -2209,6 +2229,11 @@ def main(argv=None):
         target_notes = [item.strip() for item in args.targets.split(",") if item.strip()]
         if not target_notes and isinstance(fields.get("target_notes"), list):
             target_notes = [str(item).strip() for item in fields["target_notes"] if str(item).strip()]
+        normalized_target_notes = []
+        for target in target_notes:
+            normalized = _normalize_feedback_target(target)
+            if normalized:
+                normalized_target_notes.append(normalized)
         reason = args.reason.strip() or str(fields.get("reason", "")).strip()
 
         events_path = append_suggestion_feedback(
@@ -2223,8 +2248,8 @@ def main(argv=None):
         print(f"  Type   : {suggestion_type}")
         print(f"  Action : {action}")
         print(f"  Source : {source_note}")
-        if target_notes:
-            print(f"  Targets: {', '.join(target_notes)}")
+        if normalized_target_notes:
+            print(f"  Targets: {', '.join(normalized_target_notes)}")
         if reason:
             print(f"  Reason : {reason}")
         return

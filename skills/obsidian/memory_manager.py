@@ -114,10 +114,14 @@ class MemoryManager:
         """更新所有词条的激活分数，淘汰低于阈值的词条。"""
         updated = {}
         for word, entry in self._long_term.items():
+            freq_bonus = math.log(entry["frequency"] + 1) * 0.1
             score = self._current_activation(entry)
             if score >= _MIN_ACTIVATION_THRESHOLD:
                 entry = dict(entry)
-                entry["activation_score"] = round(score, 4)
+                # Persist only the decayed base score; frequency bonus is derived at read time.
+                entry["activation_score"] = round(max(0.0, score - freq_bonus), 4)
+                # Reset the decay baseline so future runs only decay newly elapsed time.
+                entry["last_activated"] = datetime.now().isoformat(timespec="seconds")
                 updated[word] = entry
         self._long_term = updated
 
@@ -264,6 +268,8 @@ def main(argv=None):
             results = mm.query(keywords)
             for r in results:
                 mm.activate(r["word"])
+            if results:
+                mm._save()
             ctx = mm.format_context()
         print(ctx or "[Memory] 无相关活性记忆")
 
@@ -272,6 +278,8 @@ def main(argv=None):
             print("[Error] --word 必填", file=sys.stderr)
             sys.exit(1)
         mm.activate(args.word)
+        if args.word not in mm._long_term:
+            mm.upsert(args.word)
         mm._save()
         print(f"[Memory] 已强化: {args.word}")
 

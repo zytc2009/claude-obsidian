@@ -2,7 +2,7 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 import pytest
-from skills.obsidian.memory_manager import MemoryManager, _MEMORY_FILE
+from skills.obsidian.memory_manager import MemoryManager, _MEMORY_FILE, main
 
 @pytest.fixture
 def vault(tmp_path):
@@ -129,6 +129,19 @@ class TestDecay:
         mm = self._make_entry(vault, "OldWord", 1.0, 0.15, 30)
         mm.run_decay()
         assert "OldWord" not in mm._long_term
+
+    def test_decay_resets_time_baseline_after_run(self, vault):
+        mm = self._make_entry(vault, "Titans", 1.0, 0.1, 10)
+        mm.run_decay()
+        first_score = mm._long_term["Titans"]["activation_score"]
+        first_last_activated = mm._long_term["Titans"]["last_activated"]
+
+        mm.run_decay()
+
+        second_score = mm._long_term["Titans"]["activation_score"]
+        second_last_activated = mm._long_term["Titans"]["last_activated"]
+        assert abs(second_score - first_score) < 0.01
+        assert second_last_activated >= first_last_activated
 
     def test_prune_keeps_top_n_by_score(self, vault):
         mm = MemoryManager(vault)
@@ -266,6 +279,24 @@ class TestConsolidate:
         mm.consolidate_and_flush()
         mm2 = MemoryManager(vault)
         assert "Persistent" in mm2._long_term
+
+
+class TestCLI:
+    def test_query_persists_activated_matches(self, vault):
+        mm = MemoryManager(vault)
+        mm.upsert("Titans")
+        mm._save()
+
+        before = MemoryManager(vault)._long_term["Titans"]["frequency"]
+        main(["--vault", str(vault), "--mode", "query", "--keywords", "Titans"])
+        after = MemoryManager(vault)._long_term["Titans"]["frequency"]
+
+        assert after == before + 1
+
+    def test_activate_persists_new_word_via_consolidation(self, vault):
+        main(["--vault", str(vault), "--mode", "activate", "--word", "FreshWord"])
+        mm = MemoryManager(vault)
+        assert "FreshWord" in mm._long_term
 
 
 class TestFormatContext:
