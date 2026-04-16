@@ -19,7 +19,7 @@ _INITIAL_ACTIVATION_SCORE = 0.6
 _INITIAL_DECAY_RATE = 0.1
 
 _STOPWORDS = set(
-    "的是了在和与或但因为所以如果那么这个那个一个 "
+    "的 是 了 在 和 与 或 但 因 为 所 以 如 果 那 么 这 个 一 个 "
     "a an the and or but in on at to of for with by is are was were".split()
 )
 
@@ -33,7 +33,18 @@ def _extract_keywords(text: str) -> list:
     english = re.findall(r'\b[A-Z][a-zA-Z]{1,}\b', text)
     chinese = re.findall(r'[\u4e00-\u9fff]{2,4}', text)
     all_words = wikilinks + tags + english + chinese
-    return [w for w in all_words if w.lower() not in _STOPWORDS and len(w) >= 2]
+
+    def _is_meaningful(word: str) -> bool:
+        if word.lower() in _STOPWORDS:
+            return False
+        if len(word) < 2:
+            return False
+        # 过滤完全由停用词组成的中文词
+        if all(ch in _STOPWORDS for ch in word):
+            return False
+        return True
+
+    return [w for w in all_words if _is_meaningful(w)]
 
 
 class MemoryManager:
@@ -211,3 +222,85 @@ class MemoryManager:
                 f"  {i:2}. {entry['word']:<20} score={score:.2f}  freq={entry['frequency']}"
             )
         return "\n".join(lines)
+
+    def extract_and_upsert(self, note_type: str, title: str, fields: dict, note_filename: str):
+        """从笔记字段提取关键词并写入记忆库。写笔记后自动调用。"""
+        if note_type == "concept":
+            aliases = _extract_keywords(fields.get("一句话定义", ""))
+            self.upsert(title, aliases=aliases, obsidian_link=note_filename)
+        elif note_type == "literature":
+            for kw in _extract_keywords(fields.get("核心观点", "")):
+                self.upsert(kw, obsidian_link=note_filename)
+        elif note_type == "topic":
+            for kw in _extract_keywords(fields.get("当前结论", "")):
+                self.upsert(kw, obsidian_link=note_filename)
+        # moc / project / fleeting 暂不提取
+
+
+# ---------------------------------------------------------------------------
+# CLI 入口
+# ---------------------------------------------------------------------------
+
+def main(argv=None):
+    import argparse
+    import os
+    import sys
+
+    parser = argparse.ArgumentParser(description="活性记忆系统 CLI")
+    parser.add_argument("--vault", default=os.environ.get("OBSIDIAN_VAULT_PATH", "~/obsidian"))
+    parser.add_argument("--mode", required=True,
+        choices=["query", "activate", "reinforce", "forget", "status", "flush", "decay"])
+    parser.add_argument("--keywords", default="", help="逗号分隔的关键词（query 模式）")
+    parser.add_argument("--word", default="", help="目标词（activate/reinforce/forget 模式）")
+    args = parser.parse_args(argv)
+
+    vault = Path(args.vault).expanduser()
+    mm = MemoryManager(vault)
+
+    if args.mode == "query":
+        keywords = [k.strip() for k in args.keywords.split(",") if k.strip()]
+        ctx = mm.format_context() if not keywords else ""
+        if keywords:
+            results = mm.query(keywords)
+            for r in results:
+                mm.activate(r["word"])
+            ctx = mm.format_context()
+        print(ctx or "[Memory] 无相关活性记忆")
+
+    elif args.mode in ("activate", "reinforce"):
+        if not args.word:
+            print("[Error] --word 必填", file=sys.stderr)
+            sys.exit(1)
+        mm.activate(args.word)
+        mm._save()
+        print(f"[Memory] 已强化: {args.word}")
+
+    elif args.mode == "forget":
+        if not args.word:
+            print("[Error] --word 必填", file=sys.stderr)
+            sys.exit(1)
+        if args.word in mm._long_term:
+            del mm._long_term[args.word]
+            mm._save()
+            print(f"[Memory] 已淡忘: {args.word}")
+        else:
+            print(f"[Memory] 未找到: {args.word}")
+
+    elif args.mode == "status":
+        print(mm.show_status())
+
+    elif args.mode == "flush":
+        mm.consolidate_and_flush()
+        print("[Memory] 会话巩固完成，已保存")
+
+    elif args.mode == "decay":
+        before = len(mm._long_term)
+        mm.run_decay()
+        mm.prune()
+        mm._save()
+        after = len(mm._long_term)
+        print(f"[Memory] 衰减完成：{before} → {after} 条")
+
+
+if __name__ == "__main__":
+    main()

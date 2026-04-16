@@ -300,3 +300,58 @@ class TestFormatContext:
             }
         ctx = mm.format_context()
         assert ctx.count("●") <= 5
+
+
+from skills.obsidian.memory_manager import _extract_keywords
+
+class TestExtractKeywords:
+    def test_extracts_wikilinks(self):
+        kws = _extract_keywords("参考 [[Titans论文]] 和 [[CMS设计]]")
+        assert "Titans论文" in kws
+        assert "CMS设计" in kws
+
+    def test_extracts_hashtags(self):
+        kws = _extract_keywords("这是 #AI #记忆系统 的内容")
+        assert "AI" in kws
+        assert "记忆系统" in kws
+
+    def test_extracts_capitalized_english(self):
+        kws = _extract_keywords("Titans and CMS are key concepts")
+        assert "Titans" in kws
+        assert "CMS" in kws
+
+    def test_extracts_chinese_phrases(self):
+        kws = _extract_keywords("活性记忆和遗忘机制是核心")
+        assert "活性记忆" in kws or "遗忘机制" in kws
+
+    def test_filters_stopwords(self):
+        kws = _extract_keywords("的是了在和与或")
+        assert kws == []
+
+    def test_empty_text_returns_empty(self):
+        assert _extract_keywords("") == []
+
+
+class TestExtractAndUpsert:
+    def test_concept_note_uses_title_as_word(self, vault):
+        mm = MemoryManager(vault)
+        mm.extract_and_upsert("concept", "Transformer", {"一句话定义": "一种注意力机制架构"}, "Concept - Transformer.md")
+        assert "Transformer" in mm._long_term
+
+    def test_literature_note_extracts_from_core_ideas(self, vault):
+        mm = MemoryManager(vault)
+        mm.extract_and_upsert("literature", "Titans论文", {"核心观点": "Self-Referential 模型可以自适应学习率"}, "Literature - Titans论文.md")
+        words = list(mm._long_term.keys())
+        # 应提取出 Self-Referential 或相关中文词
+        assert len(words) > 0
+
+    def test_topic_note_extracts_from_conclusions(self, vault):
+        mm = MemoryManager(vault)
+        mm.extract_and_upsert("topic", "记忆系统", {"当前结论": "CMS 多频率层优于传统双层记忆"}, "Topic - 记忆系统.md")
+        words = list(mm._long_term.keys())
+        assert len(words) > 0
+
+    def test_skips_unsupported_note_types(self, vault):
+        mm = MemoryManager(vault)
+        mm.extract_and_upsert("moc", "AI MOC", {}, "MOC - AI.md")
+        assert mm._long_term == {}
