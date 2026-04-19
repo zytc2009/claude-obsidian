@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
 import os
 import re
+
+logger = logging.getLogger(__name__)
 
 
 def strip_markdown(text: str) -> str:
@@ -52,7 +55,8 @@ def _llm_summary(content: str, title: str) -> str | None:
             messages=[{"role": "user", "content": prompt}],
         )
         return msg.content[0].text.strip()
-    except Exception:
+    except Exception as exc:
+        logger.warning("LLM summary failed: %s", exc)
         return None
 
 

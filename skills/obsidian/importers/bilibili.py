@@ -32,9 +32,12 @@ class BilibiliImporter(BaseImporter):
             params = {"aid": bvid[2:]}
         api_url = f"{self._API}?{urllib.parse.urlencode(params)}"
         headers = {**self.headers, "Referer": "https://www.bilibili.com/"}
-        req = urllib.request.Request(api_url, headers=headers)
-        with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310
-            return resp.read().decode("utf-8")
+        try:
+            req = urllib.request.Request(api_url, headers=headers)
+            with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310
+                return resp.read().decode("utf-8")
+        except Exception:
+            return "{}"
 
     def parse_content(self, url: str, text: str) -> ImportResult:
         try:

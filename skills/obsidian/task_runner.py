@@ -13,7 +13,7 @@ import asyncio
 import sys
 from pathlib import Path
 
-from .task_queue import TaskQueue, TaskStatus
+from .task_queue import TaskQueue, TaskStatus, Task
 
 try:
     from .importers.router import _fetch_async
@@ -26,11 +26,9 @@ except ImportError:
     from obsidian_writer import write_note  # type: ignore[no-redef]
 
 
-async def _run_task(queue: TaskQueue, task_id: str, vault: Path) -> None:
+async def _run_task(queue: TaskQueue, task: "Task", vault: Path) -> None:
+    task_id = task.task_id
     queue.update(task_id, status=TaskStatus.RUNNING, progress=10, message="Fetching...")
-    task = queue.get(task_id)
-    if task is None:
-        return
     try:
         result = await _fetch_async(task.url)
         queue.update(task_id, progress=60, message="Writing note...")
@@ -74,11 +72,11 @@ async def _run_all(queue: TaskQueue, vault: Path, workers: int) -> None:
         return
     sem = asyncio.Semaphore(workers)
 
-    async def _guarded(task_id: str) -> None:
+    async def _guarded(task: Task) -> None:
         async with sem:
-            await _run_task(queue, task_id, vault)
+            await _run_task(queue, task, vault)
 
-    await asyncio.gather(*[_guarded(t.task_id) for t in pending])
+    await asyncio.gather(*[_guarded(t) for t in pending])
 
 
 def cmd_submit(args: argparse.Namespace) -> None:

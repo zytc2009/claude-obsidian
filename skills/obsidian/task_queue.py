@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field, asdict
@@ -46,6 +47,7 @@ class TaskQueue:
     def __init__(self, vault: Path) -> None:
         self.vault = vault
         self._path = vault / self._STATE_FILE
+        self._lock = threading.Lock()
 
     def _load(self) -> dict[str, Task]:
         if not self._path.exists():
@@ -68,21 +70,23 @@ class TaskQueue:
 
     def submit(self, url: str) -> str:
         """Add a URL import task and return its task_id."""
-        tasks = self._load()
-        task_id = uuid.uuid4().hex[:8]
-        tasks[task_id] = Task(task_id=task_id, url=url)
-        self._save(tasks)
+        with self._lock:
+            tasks = self._load()
+            task_id = uuid.uuid4().hex[:8]
+            tasks[task_id] = Task(task_id=task_id, url=url)
+            self._save(tasks)
         return task_id
 
     def update(self, task_id: str, **kwargs: Any) -> None:
-        tasks = self._load()
-        if task_id not in tasks:
-            return
-        task = tasks[task_id]
-        for key, val in kwargs.items():
-            setattr(task, key, val)
-        task.updated_at = time.time()
-        self._save(tasks)
+        with self._lock:
+            tasks = self._load()
+            if task_id not in tasks:
+                return
+            task = tasks[task_id]
+            for key, val in kwargs.items():
+                setattr(task, key, val)
+            task.updated_at = time.time()
+            self._save(tasks)
 
     def get(self, task_id: str) -> Task | None:
         return self._load().get(task_id)

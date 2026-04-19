@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import urllib.request
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 ATTACHMENTS_DIR = "07-Attachments"
 _IMG_PATTERN = re.compile(r"!\[([^\]]*)\]\((https?://[^)\s]+)\)")
@@ -27,7 +30,8 @@ def _download_image(url: str, dest: Path) -> bool:
             data = resp.read()
         dest.write_bytes(data)
         return True
-    except Exception:
+    except Exception as exc:
+        logger.debug("Failed to download %s: %s", url, exc)
         return False
 
 
