@@ -114,14 +114,18 @@ def extract_concepts(title: str, content: str) -> list[dict]:
         f"笔记内容：\n{truncate_content_smart(content)}\n\n"
         '返回格式：{"concepts": [{"name": "...", "type": "...", "description": "..."}]}'
     )
-    raw = _call_llm(system_prompt, user_prompt)
-    data = json.loads(_extract_json(raw))
-    if isinstance(data, list):
-        return data
-    if isinstance(data, dict):
-        concepts = data.get("concepts", [])
-        return concepts if isinstance(concepts, list) else []
-    return []
+    try:
+        raw = _call_llm(system_prompt, user_prompt)
+        data = json.loads(_extract_json(raw))
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            concepts = data.get("concepts", [])
+            return concepts if isinstance(concepts, list) else []
+        return []
+    except Exception as e:
+        logger.warning(f"extract_concepts failed: {e}")
+        return []
 
 
 def _normalize(name: str) -> str:
@@ -146,6 +150,8 @@ def match_to_vault(concepts: list[dict], vault: Path) -> list[str]:
             links.append(f"[[{stems_norm[name_norm]}]]")
             continue
         for stem in stems:
+            if len(stem) > 20:
+                continue
             if name_norm in _normalize(stem) or _normalize(stem) in name_norm:
                 links.append(f"[[{stem}]]")
                 break
