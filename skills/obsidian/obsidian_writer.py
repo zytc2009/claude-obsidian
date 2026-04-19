@@ -31,6 +31,14 @@ except ImportError:
     except ImportError:  # pragma: no cover - optional integration fallback
         SessionMemory = None  # type: ignore[assignment]
 
+try:
+    from .profile_manager import read_profile
+except ImportError:
+    try:
+        from profile_manager import read_profile
+    except ImportError:  # pragma: no cover - optional integration fallback
+        read_profile = None  # type: ignore[assignment]
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -62,6 +70,11 @@ NOTE_CONFIG = {
         "prefix": "MOC",
         "target": "03-Knowledge/MOCs",
         "required": [],
+    },
+    "article": {
+        "prefix": "Article",
+        "target": "06-Articles",
+        "required": ["核心论点", "正文"],
     },
 }
 
@@ -228,7 +241,16 @@ def _frontmatter(note_type: str, fields: dict, is_draft: bool = False) -> str:
     today = date.today().strftime("%Y-%m-%d")
     source = fields.get("source", "").strip()
     author = fields.get("author", "").strip()
-    status = "draft" if is_draft else "active"
+    status = "draft" if is_draft else ("review" if note_type == "article" else "active")
+    extra = ""
+    if note_type == "article":
+        source_notes = fields.get("source_notes", "").strip()
+        target_audience = fields.get("target_audience", "").strip()
+        target_value = target_audience if target_audience else '""'
+        extra = (
+            f"source_notes: {source_notes or '[]'}\n"
+            f"target_audience: {target_value}\n"
+        )
     return (
         f"---\n"
         f"type: {note_type}\n"
@@ -237,6 +259,7 @@ def _frontmatter(note_type: str, fields: dict, is_draft: bool = False) -> str:
         f"tags: []\n"
         f"source: {source}\n"
         f"author: {author}\n"
+        f"{extra}"
         f"created: {today}\n"
         f"updated: {today}\n"
         f"reviewed: false\n"
@@ -396,6 +419,31 @@ def render_moc(title: str, fields: dict, is_draft: bool = False) -> str:
 """
 
 
+def render_article(title: str, fields: dict, is_draft: bool = False) -> str:
+    fm = _frontmatter("article", fields, is_draft)
+    source_notes = fields.get("source_notes", "").strip()
+    target_audience = fields.get("target_audience", "").strip()
+    return f"""{fm}
+
+# {title}
+
+## 核心论点
+{_f(fields, "核心论点")}
+
+## 正文
+{_f(fields, "正文")}
+
+## 结语
+{_f(fields, "结语")}
+
+## 来源
+{source_notes or "_待补充_"}
+
+## 目标读者
+{target_audience or "_待补充_"}
+"""
+
+
 # ---------------------------------------------------------------------------
 # Fleeting note (append to DailyNote)
 # ---------------------------------------------------------------------------
@@ -487,6 +535,7 @@ RENDERERS = {
     "topic": render_topic,
     "project": render_project,
     "moc": render_moc,
+    "article": render_article,
 }
 
 # ---------------------------------------------------------------------------
@@ -502,6 +551,10 @@ def write_note(
     log_operation: bool = True,
 ) -> Path:
     """Render and write a note. Creates target directory if missing."""
+    duplicate_path = _check_duplicate(vault, note_type, title)
+    if duplicate_path is not None:
+        return duplicate_path
+
     target_dir = get_target_path(vault, note_type, is_draft)
     target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -521,6 +574,7 @@ def write_note(
             "topic": "Topics",
             "project": "Projects",
             "moc": "MOCs",
+            "article": "Articles",
         }
         section = section_map.get(note_type)
         if section:
@@ -542,8 +596,9 @@ def write_note(
             mm = MemoryManager(vault)
             mm.extract_and_upsert(note_type, title, fields, filepath.name)
             mm._save()
-        except Exception:
-            pass  # 记忆更新失败不阻断笔记写入
+        except Exception as _mem_err:
+            import warnings
+            warnings.warn(f"Memory update failed (non-fatal): {_mem_err}", stacklevel=2)
 
     return filepath
 
@@ -558,6 +613,8 @@ VAULT_DIRS = [
     ("02-Projects", None),
     ("03-Knowledge", ["Concepts", "Literature", "MOCs", "Topics"]),
     ("04-Archive", None),
+    ("05-Profile", None),
+    ("06-Articles", None),
 ]
 
 
@@ -1104,6 +1161,40 @@ def _section_diff_summary(existing_path: Path, new_content: str) -> str:
     return " | ".join(diffs[:5]) if diffs else "no section differences"
 
 
+def _normalize_title(title: str) -> str:
+    """Normalize a title for similarity comparison."""
+    cleaned = title or ""
+    cleaned = re.sub(
+        r"^(Article|Literature|Concept|Topic|Project|MOC)\s*[-–—]?\s*",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r"\s\d{4}-\d{2}-\d{2}$", "", cleaned)
+    cleaned = re.sub(r"[^\w\s\u4e00-\u9fff]", "", cleaned)
+    cleaned = re.sub(r"\s+", "", cleaned)
+    return cleaned.lower().strip()
+
+
+def _check_duplicate(vault: Path, note_type: str, title: str) -> Path | None:
+    """Return an existing similar note for article writes, if any."""
+    if note_type != "article":
+        return None
+    import difflib
+
+    target_dir = vault / NOTE_CONFIG[note_type]["target"]
+    if not target_dir.exists():
+        return None
+
+    candidate = _normalize_title(title)
+    for existing in target_dir.glob("*.md"):
+        existing_norm = _normalize_title(existing.stem)
+        ratio = difflib.SequenceMatcher(None, candidate, existing_norm).ratio()
+        if ratio >= 0.8:
+            return existing
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Index maintenance
 # ---------------------------------------------------------------------------
@@ -1121,6 +1212,7 @@ _INDEX_DIRS = [
     ("03-Knowledge/MOCs", "MOCs"),
     ("03-Knowledge/Concepts", "Concepts"),
     ("03-Knowledge/Literature", "Literature"),
+    ("06-Articles", "Articles"),
 ]
 
 _SUPPORTING_SECTION_TITLE = "# Supporting notes"
@@ -1266,7 +1358,7 @@ def append_suggestion_feedback(
             try:
                 session.reject_target(source_note, target)
             except Exception:
-                break
+                continue
 
     details = [
         f"Suggestion type: {suggestion_type}",
@@ -1776,9 +1868,19 @@ def touch_updated(note_path: Path) -> bool:
 
 
 def _extract_wikilinks(text: str) -> set:
-    """Return all wikilink targets from text, stripping heading anchors."""
+    """Return all wikilink targets from text, normalized to stem only.
+
+    Obsidian resolves [[folder/Note]] by stem, so we strip any path prefix
+    to avoid false-positive broken-link reports.
+    """
     pattern = r"\[\[([^\]|#]+)(?:[#|][^\]]*)?\]\]"
-    return {m.group(1).strip() for m in re.finditer(pattern, text)}
+    stems = set()
+    for m in re.finditer(pattern, text):
+        target = m.group(1).strip()
+        # Strip folder prefix: [[03-Knowledge/Topics/Foo]] → "Foo"
+        stem = target.rsplit("/", 1)[-1]
+        stems.add(stem)
+    return stems
 
 
 def _extract_section(text: str, title: str) -> str:
@@ -1820,6 +1922,12 @@ def query_vault(vault: Path, query_text: str, include_details: bool = False, lim
     }
     """
     record_session_query(vault, query_text)
+    profile_context = ""
+    if read_profile is not None:
+        try:
+            profile_context = read_profile(vault).strip()
+        except Exception:
+            profile_context = ""
     keywords = [kw.lower() for kw in _query_keywords(query_text)]
     topic_dir = vault / "03-Knowledge" / "Topics"
     topic_payloads: list[tuple[int, dict]] = []
@@ -1878,12 +1986,18 @@ def query_vault(vault: Path, query_text: str, include_details: bool = False, lim
     if tier1_topics and not include_details:
         for item in tier1_topics:
             _record_session_note(vault, "topic", item["path"])
-        return {"tier1_topics": tier1_topics, "tier2_grouped": [], "orphans": []}
+        return {
+            "tier1_topics": tier1_topics,
+            "tier2_grouped": [],
+            "orphans": [],
+            "profile_context": profile_context,
+        }
 
     detail_dirs = [
         vault / "03-Knowledge" / "Literature",
         vault / "03-Knowledge" / "Concepts",
         vault / "02-Projects",
+        vault / "06-Articles",
     ]
     grouped: dict[str, list[dict]] = {}
     orphans: list[dict] = []
@@ -1935,6 +2049,7 @@ def query_vault(vault: Path, query_text: str, include_details: bool = False, lim
         "tier1_topics": tier1_topics,
         "tier2_grouped": tier2_grouped,
         "orphans": orphans[:limit],
+        "profile_context": profile_context,
     }
 
 
@@ -1952,6 +2067,7 @@ def organize_vault(vault: Path, query_text: str, limit: int = 10) -> dict:
     candidate_dirs = [
         vault / "03-Knowledge",
         vault / "00-Inbox",
+        vault / "06-Articles",
     ]
     matches: list[tuple[int, dict]] = []
     seen_paths = {path.resolve() for path in session_hits}
@@ -2085,6 +2201,9 @@ def _fix_frontmatter(text: str, path: Path, fm: dict) -> tuple:
 
     # Insert missing keys before the closing ---
     end = text.find("---", 3)
+    if end == -1:
+        # Malformed frontmatter: no closing ---; do not attempt repair
+        return text, [f"{path.name}: skipped auto-fix (malformed frontmatter, no closing ---)"]
     insert_lines = "".join(f"{k}: {v}\n" for k, v in missing.items())
     new_text = text[:end] + insert_lines + text[end:]
     fixes = [f"{path.name}: added missing frontmatter field(s): {', '.join(missing)}"]
@@ -2465,12 +2584,19 @@ def main(argv=None):
         tier1_topics = result["tier1_topics"]
         tier2_grouped = result["tier2_grouped"]
         orphans = result["orphans"]
+        profile_context = result.get("profile_context", "")
 
         if not tier1_topics and not tier2_grouped and not orphans:
             print(f"[Query] No matches for: {query_text}")
+            if profile_context:
+                print("\n[Profile]")
+                print(profile_context)
             return
 
         print(f"[Query] {query_text}")
+        if profile_context:
+            print("\n[Profile]")
+            print(profile_context)
         if tier1_topics:
             print("\n[Tier 1: Topics]")
             for item in tier1_topics:
@@ -2805,8 +2931,26 @@ def main(argv=None):
         print("Error: --title is required for this note type", file=sys.stderr)
         sys.exit(1)
 
+    if note_type == "article" and not args.dry_run:
+        duplicate = _check_duplicate(vault, note_type, title)
+        if duplicate is not None:
+            print(f"[OK] Reused existing: {duplicate.relative_to(vault)}")
+            return
+
     if args.dry_run:
         content = RENDERERS[note_type](title, fields, is_draft)
+        if note_type == "article":
+            duplicate = _check_duplicate(vault, note_type, title)
+            if duplicate is not None:
+                print("[INGEST PREVIEW]")
+                SEP = "=" * 52
+                print(SEP)
+                print("Action  : reuse existing")
+                print(f"Target  : {duplicate.relative_to(vault)}")
+                print(SEP)
+                print(content)
+                print(SEP)
+                return
         action, existing_path, planned_path = _classify_ingest_action(
             vault, note_type, title, is_draft
         )

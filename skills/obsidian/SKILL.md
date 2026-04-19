@@ -707,3 +707,44 @@ python ~/.claude/skills/obsidian/memory_manager.py \
 > 内容不完整，已存入 Inbox。建议补充：[列出空缺的必填字段]
 
 如果脚本返回非零，展示 stderr 并说明原因。
+
+---
+
+## PROFILE / ARTICLE EXTENSIONS
+
+### `profile` — 更新个人档案
+
+更新 vault 中的个人档案笔记。子类型包括：
+- `personal`：基本信息、兴趣爱好、背景与经历
+- `projects`：活跃项目、目标、常讨论话题
+- `tooling`：编程语言、框架与库、工具链、AI 工具
+- `preferences`：AI 行为偏好、纠正记录、写作风格偏好
+
+建议使用：
+```bash
+python ~/.claude/skills/obsidian/profile_manager.py \
+  --vault "${OBSIDIAN_VAULT_PATH:-~/obsidian}" \
+  --mode upsert \
+  --subtype personal \
+  --section "基本信息" \
+  --content "姓名: Alice"
+```
+
+读取全部档案：
+```bash
+python ~/.claude/skills/obsidian/profile_manager.py \
+  --vault "${OBSIDIAN_VAULT_PATH:-~/obsidian}" \
+  --mode read
+```
+
+### `article` — 写文章
+
+将知识库内容整合为可发布文章，写入 `06-Articles/`。非草稿状态默认使用 `review`，并在写入前做重复标题检查；相似度过高时复用现有文章而不是新建文件。
+
+示例：
+```bash
+python ~/.claude/scripts/obsidian_writer.py \
+  --type article \
+  --title "RAG Writing" \
+  --fields '{"核心论点":"...","正文":"...","结语":"...","source_notes":"[[Literature - RAG Survey]]","target_audience":"Engineers"}'
+```

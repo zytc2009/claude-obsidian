@@ -468,6 +468,31 @@ class TestQueryVault:
             assert result["tier1_topics"][0]["title"] == "Topic - RAG"
             assert "Dense retrieval" in result["tier1_topics"][0]["当前结论"]
             assert result["tier2_grouped"] == []
+            assert result["profile_context"] == ""
+
+    def test_tier1_includes_profile_context_when_available(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            topic_dir = vault / "03-Knowledge/Topics"
+            profile_dir = vault / "05-Profile"
+            topic_dir.mkdir(parents=True, exist_ok=True)
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            topic = topic_dir / "Topic - RAG.md"
+            topic.write_text(
+                "---\ntype: topic\n---\n"
+                "# 主题说明\nRAG overview\n\n"
+                "# 当前结论\nDense retrieval reduces hallucination\n",
+                encoding="utf-8",
+            )
+            profile = profile_dir / "Profile - Preferences.md"
+            profile.write_text(
+                "---\ntype: profile\nsubtype: preferences\nupdated: 2026-04-19\nversion: 1\n---\n"
+                "# Preferences\n\n"
+                "## 写作风格偏好\n- keep answers concise\n",
+                encoding="utf-8",
+            )
+            result = query_vault(vault, "rag hallucination")
+            assert "keep answers concise" in result["profile_context"]
 
     def test_include_details_groups_notes_under_topic_and_keeps_orphans(self):
         with tempfile.TemporaryDirectory() as tmp:
