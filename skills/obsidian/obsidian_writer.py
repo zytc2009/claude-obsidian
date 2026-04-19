@@ -1900,6 +1900,41 @@ def _query_keywords(query_text: str) -> list[str]:
     return [part for part in re.split(r"[\s\-_]+", query_text) if len(part) >= 2]
 
 
+def _extract_profile_section(profile_context: str, section_title: str) -> str:
+    """Return a markdown subsection body from concatenated profile context."""
+    pattern = rf"(?ms)^## {re.escape(section_title)}\n(.*?)(?=^## |\Z)"
+    match = re.search(pattern, profile_context)
+    if not match:
+        return ""
+    return match.group(1).strip()
+
+
+def _profile_query_keywords(profile_context: str) -> list[str]:
+    """Extract lightweight query expansion keywords from profile context."""
+    if not profile_context:
+        return []
+
+    blocks = []
+    for section_title in ("常讨论话题", "编程语言", "工具链", "AI 行为偏好"):
+        block = _extract_profile_section(profile_context, section_title)
+        if block:
+            blocks.append(block)
+
+    keywords: list[str] = []
+    seen: set[str] = set()
+    for block in blocks:
+        for kw in _suggestion_keywords_from_stem(block):
+            cleaned = kw.strip()
+            if not cleaned:
+                continue
+            lowered = cleaned.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            keywords.append(cleaned)
+    return keywords
+
+
 def _topic_summary_payload(note_path: Path, text: str) -> dict:
     """Build the Tier 1 payload for a topic note."""
     return {
@@ -1929,6 +1964,10 @@ def query_vault(vault: Path, query_text: str, include_details: bool = False, lim
         except Exception:
             profile_context = ""
     keywords = [kw.lower() for kw in _query_keywords(query_text)]
+    for kw in _profile_query_keywords(profile_context):
+        lowered = kw.lower()
+        if lowered not in keywords:
+            keywords.append(lowered)
     topic_dir = vault / "03-Knowledge" / "Topics"
     topic_payloads: list[tuple[int, dict]] = []
     seen_topics: set[Path] = set()
@@ -2062,7 +2101,17 @@ def organize_vault(vault: Path, query_text: str, limit: int = 10) -> dict:
     - suggest whether the result should converge into a topic or a MOC
     """
     record_session_query(vault, query_text)
+    profile_context = ""
+    if read_profile is not None:
+        try:
+            profile_context = read_profile(vault).strip()
+        except Exception:
+            profile_context = ""
     keywords = [kw.lower() for kw in _query_keywords(query_text)]
+    for kw in _profile_query_keywords(profile_context):
+        lowered = kw.lower()
+        if lowered not in keywords:
+            keywords.append(lowered)
     session_hits = find_session_relevant_notes(vault, query_text, limit=min(limit, 5))
     candidate_dirs = [
         vault / "03-Knowledge",
@@ -2183,6 +2232,7 @@ def organize_vault(vault: Path, query_text: str, limit: int = 10) -> dict:
         "confidence": confidence,
         "reasons": reasons,
         "new_topic_hint": new_topic_hint,
+        "profile_context": profile_context,
     }
 
 
@@ -2632,10 +2682,17 @@ def main(argv=None):
             sys.exit(1)
         result = organize_vault(vault, query_text)
         matches = result["matches"]
+        profile_context = result.get("profile_context", "")
         if not matches:
             print(f"[Organize] No related notes found for: {query_text}")
+            if profile_context:
+                print("\n[Profile]")
+                print(profile_context)
             return
         print(f"[Organize] {query_text}")
+        if profile_context:
+            print("\n[Profile]")
+            print(profile_context)
         if result["session_hits"]:
             print("\n[Session-first]")
             for path in result["session_hits"]:

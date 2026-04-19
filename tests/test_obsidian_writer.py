@@ -54,6 +54,7 @@ from skills.obsidian.obsidian_writer import (
     update_note_sections,
     write_note,
 )
+from skills.obsidian.profile_manager import upsert_profile
 
 
 class TestIsDraftByContent:
@@ -494,6 +495,28 @@ class TestQueryVault:
             result = query_vault(vault, "rag hallucination")
             assert "keep answers concise" in result["profile_context"]
 
+    def test_tier1_uses_profile_topics_for_keyword_expansion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            topic_dir = vault / "03-Knowledge/Topics"
+            topic_dir.mkdir(parents=True, exist_ok=True)
+            topic = topic_dir / "Topic - RAG.md"
+            topic.write_text(
+                "---\ntype: topic\n---\n"
+                "# 主题说明\nRAG overview\n\n"
+                "# 当前结论\nDense retrieval reduces hallucination\n",
+                encoding="utf-8",
+            )
+            upsert_profile(
+                vault,
+                "projects",
+                "常讨论话题",
+                "- RAG\n- retrieval",
+            )
+            result = query_vault(vault, "what am I working on")
+            assert result["tier1_topics"]
+            assert result["tier1_topics"][0]["title"] == "Topic - RAG"
+
     def test_include_details_groups_notes_under_topic_and_keeps_orphans(self):
         with tempfile.TemporaryDirectory() as tmp:
             vault = Path(tmp)
@@ -658,6 +681,51 @@ class TestOrganizeVault:
             assert after_orphans == 0
             assert after["confidence"] in {"medium", "high"}
             assert any("existing topic match" in reason for reason in after["reasons"])
+
+    def test_organize_includes_profile_context_when_available(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            lit_dir = vault / "03-Knowledge/Literature"
+            profile_dir = vault / "05-Profile"
+            lit_dir.mkdir(parents=True, exist_ok=True)
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            note = lit_dir / "Literature - Attention Survey.md"
+            note.write_text(
+                "---\ntype: literature\n---\n# 镓稿绩瑙傜偣\nattention details\n",
+                encoding="utf-8",
+            )
+            profile = profile_dir / "Profile - Preferences.md"
+            profile.write_text(
+                "---\ntype: profile\nsubtype: preferences\nupdated: 2026-04-19\nversion: 1\n---\n"
+                "# Preferences\n\n"
+                "## 写作风格偏好\n- keep answers concise\n",
+                encoding="utf-8",
+            )
+            result = organize_vault(vault, "attention")
+            assert "profile_context" in result
+            assert "keep answers concise" in result["profile_context"]
+
+    def test_organize_uses_profile_topics_for_keyword_expansion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            topic_dir = vault / "03-Knowledge/Topics"
+            topic_dir.mkdir(parents=True, exist_ok=True)
+            topic = topic_dir / "Topic - RAG.md"
+            topic.write_text(
+                "---\ntype: topic\n---\n"
+                "# 主题说明\nRAG overview\n\n"
+                "# 当前结论\nDense retrieval reduces hallucination\n",
+                encoding="utf-8",
+            )
+            upsert_profile(
+                vault,
+                "projects",
+                "常讨论话题",
+                "- RAG\n- retrieval",
+            )
+            result = organize_vault(vault, "what am I working on")
+            assert result["matches"]
+            assert result["matches"][0]["title"] == "Topic - RAG"
 
 
 class TestParseFrontmatter:
