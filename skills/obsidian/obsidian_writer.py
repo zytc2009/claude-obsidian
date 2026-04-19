@@ -49,6 +49,14 @@ except ImportError:
         capture_fetch_url = None  # type: ignore[assignment]
 
 try:
+    from .image_cache import cache_images as _cache_images
+except ImportError:
+    try:
+        from image_cache import cache_images as _cache_images
+    except ImportError:  # pragma: no cover - optional integration fallback
+        _cache_images = None  # type: ignore[assignment]
+
+try:
     from .relation_extractor import extract_and_link as relation_extract_and_link
 except ImportError:
     try:
@@ -3040,6 +3048,15 @@ def main(argv=None):
         except Exception as e:
             print(f"Error: failed to capture URL: {e}", file=sys.stderr)
             sys.exit(1)
+
+        if (
+            _cache_images is not None
+            and os.environ.get("OBSIDIAN_CACHE_IMAGES", "0") == "1"
+        ):
+            import dataclasses
+            import_result = dataclasses.replace(
+                import_result, content=_cache_images(vault, import_result.content)
+            )
 
         title, capture_fields = _capture_fields_from_import_result(import_result, fields)
         if not title:
