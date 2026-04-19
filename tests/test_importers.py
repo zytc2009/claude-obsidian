@@ -13,6 +13,9 @@ class TestPlatformDetection:
     def test_detect_platform_generic(self):
         assert detect_platform("https://example.com") == "generic"
 
+    def test_detect_platform_bilibili(self):
+        assert detect_platform("https://www.bilibili.com/video/BV1xx") == "bilibili"
+
 
 class TestWechatImporter:
     def test_parse_content_extracts_title_body_and_summary(self):

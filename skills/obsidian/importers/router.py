@@ -7,6 +7,7 @@ import sys
 from urllib.parse import urlparse
 
 from .base import BaseImporter, ImportResult
+from .bilibili import BilibiliImporter
 from .wechat import WechatImporter
 from .xiaohongshu import XiaohongshuImporter
 
@@ -43,6 +44,7 @@ class GenericImporter(BaseImporter):
 _PLATFORM_RULES = [
     ("wechat", ["mp.weixin.qq.com"]),
     ("xiaohongshu", ["www.xiaohongshu.com", "xhslink.com", "xiaohongshu.com"]),
+    ("bilibili", ["www.bilibili.com", "bilibili.com", "b23.tv"]),
 ]
 
 
@@ -59,6 +61,8 @@ def _get_importer(platform: str) -> BaseImporter:
         return WechatImporter()
     if platform == "xiaohongshu":
         return XiaohongshuImporter()
+    if platform == "bilibili":
+        return BilibiliImporter()
     return GenericImporter()
 
 
