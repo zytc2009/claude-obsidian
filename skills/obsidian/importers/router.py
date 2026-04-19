@@ -10,6 +10,7 @@ from .base import BaseImporter, ImportResult
 from .bilibili import BilibiliImporter
 from .wechat import WechatImporter
 from .xiaohongshu import XiaohongshuImporter
+from .youtube import YouTubeImporter
 
 
 class GenericImporter(BaseImporter):
@@ -45,6 +46,7 @@ _PLATFORM_RULES = [
     ("wechat", ["mp.weixin.qq.com"]),
     ("xiaohongshu", ["www.xiaohongshu.com", "xhslink.com", "xiaohongshu.com"]),
     ("bilibili", ["www.bilibili.com", "bilibili.com", "b23.tv"]),
+    ("youtube", ["www.youtube.com", "youtube.com", "youtu.be"]),
 ]
 
 
@@ -63,6 +65,8 @@ def _get_importer(platform: str) -> BaseImporter:
         return XiaohongshuImporter()
     if platform == "bilibili":
         return BilibiliImporter()
+    if platform == "youtube":
+        return YouTubeImporter()
     return GenericImporter()
 
 

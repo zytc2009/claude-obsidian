@@ -16,6 +16,12 @@ class TestPlatformDetection:
     def test_detect_platform_bilibili(self):
         assert detect_platform("https://www.bilibili.com/video/BV1xx") == "bilibili"
 
+    def test_detect_platform_youtube(self):
+        assert detect_platform("https://www.youtube.com/watch?v=abc") == "youtube"
+
+    def test_detect_platform_youtu_be(self):
+        assert detect_platform("https://youtu.be/abc") == "youtube"
+
 
 class TestWechatImporter:
     def test_parse_content_extracts_title_body_and_summary(self):
