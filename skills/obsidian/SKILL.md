@@ -324,6 +324,22 @@ python ~/.claude/scripts/obsidian_writer.py \
 
 This keeps all reasoning in the skill while reducing shell round-trips and ensuring the log captures the whole ingest as one operation.
 
+## Capture Addendum: Platform Routing and Relation Extraction
+
+Capture now routes URLs through a small platform detector before writing:
+
+- `mp.weixin.qq.com` -> `skills/obsidian/importers/wechat.py`
+- `www.xiaohongshu.com` / `xhslink.com` / `xiaohongshu.com` -> `skills/obsidian/importers/xiaohongshu.py`
+- everything else -> generic HTML capture
+
+Recommended flow:
+
+1. Run `python skills/obsidian/importers/router.py --url <url>` to inspect the imported payload.
+2. Fill the literature fields from the imported title/content/summary.
+3. Call `obsidian_writer.py --type capture --url <url> --fields '<JSON>'` to write the note.
+
+If `OBSIDIAN_RELATION_EXTRACT=1` and `ANTHROPIC_API_KEY` is available, the writer also runs relation extraction after a successful write and appends `## 相关概念` links non-fatally.
+
 ## MODE: log — 对话转文档
 
 **Goal:** 把当前对话整理成一篇完整笔记，保留信息密度。

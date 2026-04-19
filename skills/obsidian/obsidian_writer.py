@@ -20,6 +20,7 @@ import json
 import os
 import re
 import sys
+import warnings
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -38,6 +39,22 @@ except ImportError:
         from profile_manager import read_profile
     except ImportError:  # pragma: no cover - optional integration fallback
         read_profile = None  # type: ignore[assignment]
+
+try:
+    from .importers.router import fetch_url as capture_fetch_url
+except ImportError:
+    try:
+        from importers.router import fetch_url as capture_fetch_url
+    except ImportError:  # pragma: no cover - optional integration fallback
+        capture_fetch_url = None  # type: ignore[assignment]
+
+try:
+    from .relation_extractor import extract_and_link as relation_extract_and_link
+except ImportError:
+    try:
+        from relation_extractor import extract_and_link as relation_extract_and_link
+    except ImportError:  # pragma: no cover - optional integration fallback
+        relation_extract_and_link = None  # type: ignore[assignment]
 
 # ---------------------------------------------------------------------------
 # Config
@@ -241,13 +258,19 @@ def _frontmatter(note_type: str, fields: dict, is_draft: bool = False) -> str:
     today = date.today().strftime("%Y-%m-%d")
     source = fields.get("source", "").strip()
     author = fields.get("author", "").strip()
+    platform = fields.get("platform", "").strip()
+    source_url = fields.get("source_url", "").strip()
     status = "draft" if is_draft else ("review" if note_type == "article" else "active")
     extra = ""
+    if platform:
+        extra += f"platform: {platform}\n"
+    if source_url:
+        extra += f"source_url: {source_url}\n"
     if note_type == "article":
         source_notes = fields.get("source_notes", "").strip()
         target_audience = fields.get("target_audience", "").strip()
         target_value = target_audience if target_audience else '""'
-        extra = (
+        extra = extra + (
             f"source_notes: {source_notes or '[]'}\n"
             f"target_audience: {target_value}\n"
         )
@@ -597,10 +620,49 @@ def write_note(
             mm.extract_and_upsert(note_type, title, fields, filepath.name)
             mm._save()
         except Exception as _mem_err:
-            import warnings
             warnings.warn(f"Memory update failed (non-fatal): {_mem_err}", stacklevel=2)
 
+    if (
+        not is_draft
+        and note_type in _NOTE_TYPES_REQUIRING_RELATION_EXTRACT
+        and relation_extract_and_link is not None
+        and os.environ.get("OBSIDIAN_RELATION_EXTRACT") == "1"
+    ):
+        try:
+            links = relation_extract_and_link(vault, filepath)
+            if links:
+                warnings.warn(
+                    f"Relation extraction added {len(links)} link(s) to {filepath.name}",
+                    stacklevel=2,
+                )
+        except Exception as _rel_err:
+            warnings.warn(f"Relation extraction failed (non-fatal): {_rel_err}", stacklevel=2)
+
     return filepath
+
+
+def _capture_fields_from_import_result(import_result, user_fields: dict) -> tuple[str, dict]:
+    """Build literature note fields from a platform import result."""
+    fields = dict(user_fields)
+    title = str(import_result.title or "").strip()
+    platform = str(getattr(import_result, "platform", "") or "").strip()
+    source_url = str(getattr(import_result, "source_url", "") or "").strip()
+    summary = str(getattr(import_result, "summary", "") or "").strip()
+    content = str(getattr(import_result, "content", "") or "").strip()
+    metadata = getattr(import_result, "metadata", {}) or {}
+
+    fields.setdefault("source", source_url)
+    fields.setdefault("platform", platform)
+    fields.setdefault("source_url", source_url)
+    if summary and not fields.get("核心观点", "").strip():
+        fields["核心观点"] = summary
+    if content and not fields.get("原文主要内容", "").strip():
+        fields["原文主要内容"] = content
+    if isinstance(metadata, dict):
+        author = str(metadata.get("author", "") or "").strip()
+        if author and not fields.get("author", "").strip():
+            fields["author"] = author
+    return title, fields
 
 
 # ---------------------------------------------------------------------------
@@ -1219,6 +1281,7 @@ _SUPPORTING_SECTION_TITLE = "# Supporting notes"
 _SOURCES_SECTION_TITLE = "# Sources"
 _CONFLICTS_SECTION_TITLE = "# Conflicts"
 _TOPIC_CASCADE_FIELDS = {"主题说明", "核心问题", "重要资料", "相关项目", "当前结论", "未解决问题"}
+_NOTE_TYPES_REQUIRING_RELATION_EXTRACT = {"literature", "concept", "topic", "project"}
 
 
 def _index_entry(note_path: Path, vault: Path) -> str:
@@ -2501,7 +2564,7 @@ def parse_args(argv=None):
     parser.add_argument(
         "--type",
         required=True,
-        choices=list(NOTE_CONFIG.keys()) + ["fleeting", "init", "lint", "index", "query", "organize", "merge-candidates", "merge-update", "cascade-candidates", "cascade-update", "conflict-update", "ingest-sync", "suggestion-feedback", "topic-scout"],
+        choices=list(NOTE_CONFIG.keys()) + ["capture", "fleeting", "init", "lint", "index", "query", "organize", "merge-candidates", "merge-update", "cascade-candidates", "cascade-update", "conflict-update", "ingest-sync", "suggestion-feedback", "topic-scout"],
         help="Note type",
     )
     parser.add_argument(
@@ -2510,6 +2573,7 @@ def parse_args(argv=None):
         help="Auto-fix simple issues (missing frontmatter fields) during lint",
     )
     parser.add_argument("--title", default="", help="Note title")
+    parser.add_argument("--url", default="", help="Capture URL")
     parser.add_argument(
         "--source-note",
         default="",
@@ -2960,6 +3024,58 @@ def main(argv=None):
             print(f"  Targets: {', '.join(normalized_target_notes)}")
         if reason:
             print(f"  Reason : {reason}")
+        return
+
+    if note_type == "capture":
+        capture_url = args.url.strip() or args.title.strip() or str(fields.get("url", "")).strip()
+        if not capture_url:
+            print("Error: --url is required for capture", file=sys.stderr)
+            sys.exit(1)
+        if capture_fetch_url is None:
+            print("Error: capture importers are unavailable", file=sys.stderr)
+            sys.exit(1)
+
+        try:
+            import_result = capture_fetch_url(capture_url)
+        except Exception as e:
+            print(f"Error: failed to capture URL: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        title, capture_fields = _capture_fields_from_import_result(import_result, fields)
+        if not title:
+            fallback = capture_url.rstrip("/").rsplit("/", 1)[-1].split("?", 1)[0]
+            title = fallback or "Captured Content"
+
+        if args.dry_run:
+            print("[Capture preview]")
+            print(json.dumps(
+                {
+                    "title": title,
+                    "platform": import_result.platform,
+                    "source_url": import_result.source_url,
+                    "summary": import_result.summary,
+                    "metadata": import_result.metadata or {},
+                },
+                ensure_ascii=False,
+                indent=2,
+            ))
+            print("\n[Fields]")
+            print(json.dumps(capture_fields, ensure_ascii=False, indent=2))
+            return
+
+        filepath = write_note(
+            vault=vault,
+            note_type="literature",
+            title=title,
+            fields=capture_fields,
+            is_draft=args.draft == "true",
+        )
+        rel_path = filepath.relative_to(vault)
+        print(f"[OK] Captured: {rel_path}")
+        print(f"  Platform: {import_result.platform}")
+        print(f"  Source  : {import_result.source_url}")
+        if import_result.summary:
+            print(f"  Summary : {import_result.summary[:120]}")
         return
 
     # --- Fleeting: special case ---
