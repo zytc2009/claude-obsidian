@@ -323,14 +323,11 @@ def render_literature(title: str, fields: dict, is_draft: bool = False) -> str:
 # 值得记住的细节
 {_f(fields, "细节")}
 
-# 我不认同或存疑的地方
-{_f(fields, "存疑之处")}
+# 我的疑问
+{_f(fields, "我的疑问")}
 
 # 可转化为哪些概念卡
 {_f(fields, "可转化概念")}
-
-# 可做哪些验证实验
-{_f(fields, "验证实验")}
 
 # 与已有知识的连接
 {_f(fields, "知识连接")}
@@ -950,7 +947,7 @@ _SCOUT_TOP_WORDS = 4   # words in suggested topic name
 # Chinese section header patterns that are note-template boilerplate
 _SCOUT_BOILERPLATE = {
     "资料信息", "与已有知识的连接", "原文主要内容", "核心观点", "方法要点",
-    "存疑之处", "可转化概念", "验证实验", "知识连接", "细节",
+    "存疑之处", "我的疑问", "可转化概念", "验证实验", "知识连接", "细节",
     "一句话定义", "解决什么问题", "核心机制", "关键公式或流程", "优点",
     "局限", "适用场景", "常见误区", "我的理解", "相关链接",
     "主题说明", "核心问题", "重要资料", "相关项目", "当前结论", "未解决问题",
