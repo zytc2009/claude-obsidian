@@ -135,7 +135,12 @@ def _normalize(name: str) -> str:
 def match_to_vault(concepts: list[dict], vault: Path) -> list[str]:
     all_notes = list(vault.rglob("*.md"))
     stems = {f.stem for f in all_notes}
-    stems_norm = {_normalize(s): s for s in stems}
+    stems_norm: dict[str, str] = {}
+    for stem in stems:
+        stems_norm[_normalize(stem)] = stem
+        alias = re.sub(r"^(Concept|Topic|Project|Literature)\s+-\s+", "", stem, flags=re.IGNORECASE)
+        if alias != stem:
+            stems_norm.setdefault(_normalize(alias), stem)
 
     links: list[str] = []
     for concept in concepts:

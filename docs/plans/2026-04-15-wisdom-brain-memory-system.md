@@ -109,7 +109,7 @@ class TestSave:
 - [ ] **步骤 2：运行测试确认失败**
 
 ```bash
-cd D:/AI/claude_code/claude-obsidian
+cd <repo-root>
 python -m pytest tests/test_memory_manager.py -v 2>&1 | head -30
 ```
 

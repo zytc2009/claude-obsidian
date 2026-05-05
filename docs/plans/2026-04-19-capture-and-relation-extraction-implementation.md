@@ -12,8 +12,8 @@
 - 记忆系统：`skills/obsidian/memory_manager.py`
 - 档案管理：`skills/obsidian/profile_manager.py`
 - 测试：`tests/`，运行：`python -m pytest tests/ -q`
-- 来源参考：`D:/AI/SparkNoteAI/apps/backend/app/services/importers/`
-- 来源参考：`D:/AI/SparkNoteAI/apps/backend/app/services/knowledge_graph.py`
+- 来源参考：`<SparkNoteAI repo>/apps/backend/app/services/importers/`
+- 来源参考：`<SparkNoteAI repo>/apps/backend/app/services/knowledge_graph.py`
 
 ---
 
@@ -25,7 +25,7 @@
 - `skills/obsidian/importers/__init__.py`（空文件）
 - `skills/obsidian/importers/base.py`（新建）
 
-`base.py` 内容从 `D:/AI/SparkNoteAI/apps/backend/app/services/importers/base.py` 移植，改动：
+`base.py` 内容从 `<SparkNoteAI repo>/apps/backend/app/services/importers/base.py` 移植，改动：
 1. 删除 `from app.core.logger import get_logger` 及相关 logger 调用
 2. 保持其余代码不变（`ImportResult` dataclass + `BaseImporter` ABC）
 

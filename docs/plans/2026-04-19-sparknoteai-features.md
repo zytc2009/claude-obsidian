@@ -106,7 +106,7 @@ class TestGenerate:
 - [ ] **Step 1.2: Run tests to verify they fail**
 
 ```
-cd D:/AI/claude_code/claude-obsidian
+cd <repo-root>
 python -m pytest tests/test_summary_generator.py -v
 ```
 Expected: `ImportError` or `ModuleNotFoundError`

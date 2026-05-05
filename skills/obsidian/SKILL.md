@@ -1,8 +1,22 @@
 ---
+name: obsidian
 description: Write and organize notes in the Obsidian knowledge base. Handles quick fleeting notes, web/file capture, conversation logging, and archiving related notes. Triggered by /obsidian, or natural language like "记一下", "帮我整理这次对话", "抓取这个网页", "把这些笔记归档".
 ---
 
 You are managing the user's local Obsidian vault. The default path is `~/obsidian/`, but check the `OBSIDIAN_VAULT_PATH` environment variable first — the user may have configured a custom path.
+
+## Skill 路径兼容
+
+本 skill 同时支持 Claude 和 Codex。运行脚本前先定位当前安装目录，后续命令中的 `<OBSIDIAN_SKILL_DIR>` 指向该目录。
+
+按以下顺序查找：
+
+1. 当前 skill 文件所在目录
+2. 环境变量 `OBSIDIAN_SKILL_DIR`
+3. Claude 默认安装目录：`~/.claude/skills/obsidian`
+4. Codex 默认安装目录：`~/.codex/skills/obsidian`
+
+优先使用当前运行环境下实际存在的目录。所有脚本都在该目录内，例如 `obsidian_writer.py`、`memory_manager.py`、`profile_manager.py`。
 
 ## 会话启动：注入分层记忆上下文
 
@@ -20,7 +34,7 @@ You are managing the user's local Obsidian vault. The default path is `~/obsidia
 2. **再看 activation memory**：运行以下命令获取当前活性记忆：
 
 ```bash
-python ~/.claude/skills/obsidian/memory_manager.py \
+python <OBSIDIAN_SKILL_DIR>/memory_manager.py \
   --vault "${OBSIDIAN_VAULT_PATH:-~/obsidian}" \
   --mode query \
   --keywords "<关键词>"
@@ -67,7 +81,7 @@ If still unclear, ask: "你想做什么？fleeting（速记）/ capture（抓取
 
 2. 调用脚本：
 ```bash
-python ~/.claude/scripts/obsidian_writer.py \
+python <OBSIDIAN_SKILL_DIR>/obsidian_writer.py \
   --type fleeting \
   --fields '{"content": "<内容>", "tags": "<标签>"}'
 ```
@@ -122,7 +136,7 @@ python ~/.claude/scripts/obsidian_writer.py \
 先跑 `--dry-run` 生成 ingest plan，展示给用户：
 
 ```bash
-python ~/.claude/scripts/obsidian_writer.py \
+python <OBSIDIAN_SKILL_DIR>/obsidian_writer.py \
   --type literature \
   --title "<标题>" \
   --fields '<JSON字段>' \
@@ -145,7 +159,7 @@ python ~/.claude/scripts/obsidian_writer.py \
 字段不足，直接写入 Inbox，不出 preview：
 
 ```bash
-python ~/.claude/scripts/obsidian_writer.py \
+python <OBSIDIAN_SKILL_DIR>/obsidian_writer.py \
   --type literature \
   --title "<标题>" \
   --fields '<JSON字段>' \
@@ -159,7 +173,7 @@ python ~/.claude/scripts/obsidian_writer.py \
 用户确认 preview 后执行实际写入：
 
 ```bash
-python ~/.claude/scripts/obsidian_writer.py \
+python <OBSIDIAN_SKILL_DIR>/obsidian_writer.py \
   --type literature \
   --title "<标题>" \
   --fields '<JSON字段>' \
@@ -194,7 +208,7 @@ Use this decision order:
 1. Run:
 
 ```bash
-python ~/.claude/scripts/obsidian_writer.py \
+python <OBSIDIAN_SKILL_DIR>/obsidian_writer.py \
   --type merge-candidates \
   --title "<source title>"
 ```
@@ -210,7 +224,7 @@ python ~/.claude/scripts/obsidian_writer.py \
 If you decide to merge, synthesize the updated sections first, then call:
 
 ```bash
-python ~/.claude/scripts/obsidian_writer.py \
+python <OBSIDIAN_SKILL_DIR>/obsidian_writer.py \
   --type merge-update \
   --target "<target note path relative to vault>" \
   --fields '<JSON with updated sections>' \
@@ -242,7 +256,7 @@ After creating or merging a `literature` note, do a narrow topic cascade check:
 1. Run:
 
 ```bash
-python ~/.claude/scripts/obsidian_writer.py \
+python <OBSIDIAN_SKILL_DIR>/obsidian_writer.py \
   --type cascade-candidates \
   --target "<literature note path relative to vault>"
 ```
@@ -258,7 +272,7 @@ python ~/.claude/scripts/obsidian_writer.py \
 If a topic should be updated, call:
 
 ```bash
-python ~/.claude/scripts/obsidian_writer.py \
+python <OBSIDIAN_SKILL_DIR>/obsidian_writer.py \
   --type cascade-update \
   --target "<topic note path relative to vault>" \
   --fields '<JSON with updated topic sections>' \
@@ -289,7 +303,7 @@ Use `conflict-update` when all of these are true:
 Call:
 
 ```bash
-python ~/.claude/scripts/obsidian_writer.py \
+python <OBSIDIAN_SKILL_DIR>/obsidian_writer.py \
   --type conflict-update \
   --target "<topic or concept note path relative to vault>" \
   --fields '{"claim": "<new conflicting claim>"}' \
@@ -306,7 +320,7 @@ When you already know the full deterministic plan, prefer a single `ingest-sync`
 Use this shape:
 
 ```bash
-python ~/.claude/scripts/obsidian_writer.py \
+python <OBSIDIAN_SKILL_DIR>/obsidian_writer.py \
   --type ingest-sync \
   --target "<primary literature note path relative to vault>" \
   --fields '{
@@ -367,7 +381,7 @@ If `OBSIDIAN_RELATION_EXTRACT=1` and `ANTHROPIC_API_KEY` is available, the write
 ### Step L4: 写入笔记
 
 ```bash
-python ~/.claude/scripts/obsidian_writer.py \
+python <OBSIDIAN_SKILL_DIR>/obsidian_writer.py \
   --type <类型> \
   --title "<标题>" \
   --fields '<JSON字段>' \
@@ -406,7 +420,7 @@ python ~/.claude/scripts/obsidian_writer.py \
 直接调用 organize CLI：
 
 ```bash
-python ~/.claude/scripts/obsidian_writer.py \
+python <OBSIDIAN_SKILL_DIR>/obsidian_writer.py \
   --type organize \
   --query "<主题或关键词>"
 ```
@@ -437,7 +451,7 @@ python ~/.claude/scripts/obsidian_writer.py \
 如果有实质性综合内容 → 写 `topic`
 
 ```bash
-python ~/.claude/scripts/obsidian_writer.py \
+python <OBSIDIAN_SKILL_DIR>/obsidian_writer.py \
   --type topic \
   --title "<主题名>" \
   --fields '<JSON字段>' \
@@ -498,7 +512,7 @@ source, author, 类型, 解决的问题, 核心观点, 方法要点, 细节, 原
 ### Step W4: 写入笔记
 
 ```bash
-python ~/.claude/scripts/obsidian_writer.py \
+python <OBSIDIAN_SKILL_DIR>/obsidian_writer.py \
   --type <类型> \
   --title "<标题>" \
   --fields '<JSON字段>' \
@@ -530,7 +544,7 @@ python ~/.claude/scripts/obsidian_writer.py \
 **Goal:** 首次使用时创建 vault 所需的所有目录，完成后展示目录树确认。
 
 ```bash
-python ~/.claude/scripts/obsidian_writer.py --type init
+python <OBSIDIAN_SKILL_DIR>/obsidian_writer.py --type init
 ```
 
 直接展示脚本输出，无需额外处理。
@@ -546,7 +560,7 @@ python ~/.claude/scripts/obsidian_writer.py --type init
 直接调用查询 CLI：
 
 ```bash
-python ~/.claude/scripts/obsidian_writer.py \
+python <OBSIDIAN_SKILL_DIR>/obsidian_writer.py \
   --type query \
   --query "<用户问题>"
 ```
@@ -572,7 +586,7 @@ python ~/.claude/scripts/obsidian_writer.py \
 当用户说"展开"、"细节"、"给我原文"、"原始资料"时，或 Tier 1 无命中时，调用：
 
 ```bash
-python ~/.claude/scripts/obsidian_writer.py \
+python <OBSIDIAN_SKILL_DIR>/obsidian_writer.py \
   --type query \
   --query "<用户问题>" \
   --details
@@ -590,7 +604,7 @@ python ~/.claude/scripts/obsidian_writer.py \
 如果用户说"存下来"、"保存这个回答"：
 
 ```bash
-python ~/.claude/scripts/obsidian_writer.py \
+python <OBSIDIAN_SKILL_DIR>/obsidian_writer.py \
   --type topic \
   --title "<问题主题>" \
   --fields '{"主题说明": "...", "当前结论": "...", "重要资料": "[[...]]"}' \
@@ -618,10 +632,10 @@ python ~/.claude/scripts/obsidian_writer.py \
 
 ```bash
 # 仅报告
-python ~/.claude/scripts/obsidian_writer.py --type lint
+python <OBSIDIAN_SKILL_DIR>/obsidian_writer.py --type lint
 
 # 报告 + 自动修复 frontmatter
-python ~/.claude/scripts/obsidian_writer.py --type lint --auto-fix
+python <OBSIDIAN_SKILL_DIR>/obsidian_writer.py --type lint --auto-fix
 ```
 
 ### 使用时机
@@ -639,7 +653,7 @@ python ~/.claude/scripts/obsidian_writer.py --type lint --auto-fix
 > 仅在索引混乱或首次使用时需要重建。
 
 ```bash
-python ~/.claude/scripts/obsidian_writer.py --type index
+python <OBSIDIAN_SKILL_DIR>/obsidian_writer.py --type index
 ```
 
 直接展示脚本输出。索引文件位于 vault 根目录的 `_index.md`。
@@ -651,7 +665,7 @@ python ~/.claude/scripts/obsidian_writer.py --type index
 **Goal:** 扫描 `00-Inbox/` 和 `03-Knowledge/`（不含 `Topics/`），找出所有没有 topic 父节点的笔记，按词汇相似度聚类，提出建议 topic。
 
 ```bash
-python ~/.claude/scripts/obsidian_writer.py --type topic-scout
+python <OBSIDIAN_SKILL_DIR>/obsidian_writer.py --type topic-scout
 ```
 
 脚本输出：
@@ -685,14 +699,14 @@ python ~/.claude/scripts/obsidian_writer.py --type topic-scout
 
 **显示状态：**
 ```bash
-python ~/.claude/skills/obsidian/memory_manager.py \
+python <OBSIDIAN_SKILL_DIR>/memory_manager.py \
   --vault "${OBSIDIAN_VAULT_PATH:-~/obsidian}" \
   --mode status
 ```
 
 **强化词条：**
 ```bash
-python ~/.claude/skills/obsidian/memory_manager.py \
+python <OBSIDIAN_SKILL_DIR>/memory_manager.py \
   --vault "${OBSIDIAN_VAULT_PATH:-~/obsidian}" \
   --mode reinforce \
   --word "<词>"
@@ -700,7 +714,7 @@ python ~/.claude/skills/obsidian/memory_manager.py \
 
 **淡忘词条：**
 ```bash
-python ~/.claude/skills/obsidian/memory_manager.py \
+python <OBSIDIAN_SKILL_DIR>/memory_manager.py \
   --vault "${OBSIDIAN_VAULT_PATH:-~/obsidian}" \
   --mode forget \
   --word "<词>"
@@ -708,7 +722,7 @@ python ~/.claude/skills/obsidian/memory_manager.py \
 
 **运行衰减：**
 ```bash
-python ~/.claude/skills/obsidian/memory_manager.py \
+python <OBSIDIAN_SKILL_DIR>/memory_manager.py \
   --vault "${OBSIDIAN_VAULT_PATH:-~/obsidian}" \
   --mode decay
 ```
@@ -738,7 +752,7 @@ python ~/.claude/skills/obsidian/memory_manager.py \
 
 建议使用：
 ```bash
-python ~/.claude/skills/obsidian/profile_manager.py \
+python <OBSIDIAN_SKILL_DIR>/profile_manager.py \
   --vault "${OBSIDIAN_VAULT_PATH:-~/obsidian}" \
   --mode upsert \
   --subtype personal \
@@ -748,7 +762,7 @@ python ~/.claude/skills/obsidian/profile_manager.py \
 
 读取全部档案：
 ```bash
-python ~/.claude/skills/obsidian/profile_manager.py \
+python <OBSIDIAN_SKILL_DIR>/profile_manager.py \
   --vault "${OBSIDIAN_VAULT_PATH:-~/obsidian}" \
   --mode read
 ```
@@ -759,7 +773,7 @@ python ~/.claude/skills/obsidian/profile_manager.py \
 
 示例：
 ```bash
-python ~/.claude/scripts/obsidian_writer.py \
+python <OBSIDIAN_SKILL_DIR>/obsidian_writer.py \
   --type article \
   --title "RAG Writing" \
   --fields '{"核心论点":"...","正文":"...","结语":"...","source_notes":"[[Literature - RAG Survey]]","target_audience":"Engineers"}'

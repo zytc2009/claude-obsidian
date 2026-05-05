@@ -8,7 +8,7 @@
 
 ## 1. 目标
 
-在 Claude Code 会话中，通过斜杠命令或自然语言，将调研内容、实验记录、主题汇总、项目规划直接写入本地 Obsidian vault（`D:/whb/obsidian/`），无需手动复制粘贴或在 Obsidian 内切换。
+在 Claude Code 会话中，通过斜杠命令或自然语言，将调研内容、实验记录、主题汇总、项目规划直接写入本地 Obsidian vault（默认 `~/obsidian/`，可通过 `OBSIDIAN_VAULT_PATH` 覆盖），无需手动复制粘贴或在 Obsidian 内切换。
 
 **不在范围内：**
 - 会话结束自动触发（Stop hook）
@@ -35,7 +35,7 @@ Claude Code Skill: obsidian
   - 生成文件名
   - 写入文件
   ↓
-D:/whb/obsidian/
+~/obsidian/
   ├── 00-Inbox/           ← draft 笔记
   ├── 03-Knowledge/
   │   ├── Literature/     ← 资料笔记
@@ -56,7 +56,7 @@ D:/whb/obsidian/
 |------|------|
 | Skill | `~/.claude/skills/obsidian` |
 | Script | `~/.claude/scripts/obsidian_writer.py` |
-| Obsidian vault | `D:/whb/obsidian/` |
+| Obsidian vault | `~/obsidian/`（可通过 `OBSIDIAN_VAULT_PATH` 覆盖） |
 
 ---
 

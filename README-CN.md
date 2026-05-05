@@ -129,7 +129,7 @@ obsidian_writer.py                - 模板渲染，文件读写（无 LLM 调用
 
 示例输出：
 ```
-[Lint] Scanned 47 notes in D:/obsidian/
+[Lint] Scanned 47 notes in ~/obsidian/
 
 [Broken links] (1)
 ⚠ 03-Knowledge/MOCs/MOC - AI Learning.md → [[Concept - GPT5]]
@@ -192,7 +192,7 @@ Singletons (1 note(s) with no close match):
   + 01-DailyNotes/
   ...
 
-D:/obsidian/
+~/obsidian/
 ├── 00-Inbox/
 ├── 01-DailyNotes/
 ├── 02-Projects/

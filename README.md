@@ -130,7 +130,7 @@ Detected issues are appended to `_corrections.jsonl` as machine-readable correct
 
 Example output:
 ```
-[Lint] Scanned 47 notes in D:/obsidian/
+[Lint] Scanned 47 notes in ~/obsidian/
 
 [Broken links] (1)
 ⚠ 03-Knowledge/MOCs/MOC - AI Learning.md → [[Concept - GPT5]]
@@ -301,7 +301,7 @@ Example output:
   + 01-DailyNotes/
   ...
 
-D:/obsidian/
+~/obsidian/
 ├── 00-Inbox/
 ├── 01-DailyNotes/
 ├── 02-Projects/

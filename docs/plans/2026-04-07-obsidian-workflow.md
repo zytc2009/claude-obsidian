@@ -192,7 +192,7 @@ from pathlib import Path
 # Config
 # ---------------------------------------------------------------------------
 
-VAULT_PATH = Path(os.environ.get("OBSIDIAN_VAULT_PATH", "D:/whb/obsidian"))
+VAULT_PATH = Path(os.environ.get("OBSIDIAN_VAULT_PATH", "~/obsidian")).expanduser()
 
 NOTE_CONFIG = {
     "literature": {
@@ -957,7 +957,7 @@ git commit -m "feat: add CLI entry point and integration tests"
 description: Write a structured note to the Obsidian knowledge base. Use when the user asks to save research, experiments, topic overviews, or project plans to Obsidian. Triggered by /obsidian, or natural language like "帮我写一个关于X的资料笔记", "把这次实验记录下来", "建一个X主题页", "新建一个X项目".
 ---
 
-You are writing a structured note to the user's local Obsidian vault at `D:/whb/obsidian/`.
+You are writing a structured note to the user's local Obsidian vault at `~/obsidian/` by default, or `OBSIDIAN_VAULT_PATH` when configured.
 
 ## Step 1: Identify Note Type
 
@@ -1104,7 +1104,7 @@ Open a new Claude Code session and run:
 ```
 Tell Claude: "这是一篇关于 RAG 的博客，作者是 Lewis 等人，主要观点是检索增强可以提升 LLM 的事实准确性。"
 
-Expected: Claude writes a file to `D:/whb/obsidian/00-Inbox/Literature - *.md`, reports the path.
+Expected: Claude writes a file to `<vault>/00-Inbox/Literature - *.md`, reports the path.
 
 - [ ] **Step 4: Commit**
 
