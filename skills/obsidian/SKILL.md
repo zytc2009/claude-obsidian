@@ -58,6 +58,7 @@ python <OBSIDIAN_SKILL_DIR>/memory_manager.py \
 | 记一下, 想到一个, 随手记, fleeting | `fleeting` |
 | URL (http/https), 本地文件路径, 帮我抓取, capture | `capture` |
 | 整理这次对话, 对话记录, 把我们的讨论存下来, log | `log` |
+| 查看图谱, 知识图谱, 笔记关系图, 思维导图, graph | `graph` |
 | 整理归档, 搜索合并, 相关笔记, organize | `organize` |
 | 资料笔记, 文章, 论文, 博客, 概念卡, 主题页, 项目, write | `write` |
 | 初始化, 创建目录, 初次使用, init | `init` |
@@ -657,6 +658,60 @@ python <OBSIDIAN_SKILL_DIR>/obsidian_writer.py --type index
 ```
 
 直接展示脚本输出。索引文件位于 vault 根目录的 `_index.md`。
+
+---
+
+## MODE: graph — 知识图谱 + 思维导图可视化
+
+**Goal:** 把 vault 渲染成一个**单文件交互式 HTML**，浏览器直接打开就能看节点拓扑、点击节点看完整信息、跳转 Obsidian。零外部依赖（D3 从 CDN 加 SRI hash 加载）。
+
+### 四种视图（HTML 内可切换）
+
+| 视图 | 数据结构 | 适合看什么 |
+|---|---|---|
+| 📊 **Graph** | 全量力导向图 | 整个 vault 的拓扑、中心节点、孤儿 |
+| 🎯 **Ego** | 单 topic + 一跳邻居辐射 | 一个 topic 的所有归属资料 |
+| 🗺️ **Mindmap (topic)** | 径向树：topic 为根，H2 区块为分支，wikilink 为叶 | 单个 topic 的层级结构 |
+| 🏥 **Health** | 径向树，5 个健康分类分支 | 孤儿 / 含断链 / 草稿 / 陈旧 / 空壳 一眼可见，点击直接跳笔记 |
+
+**Health 5 类**：🔴 孤儿（in=out=0） · 🟠 含断链 · 🟣 草稿（status=draft） · 🟡 陈旧（>90 天未更新） · ⚫ 空壳（所有区块 `_待补充_`）。空分类自动隐藏。
+
+### 节点交互
+
+- 悬停 → 高亮一跳邻居（不弹小 tooltip）
+- 点击 → **右侧弹出持久 info panel**（点 ✕ 或 Esc 关闭）
+- panel 内容：类型 chip / 关键字段高亮卡 / 出链按 H2 分组 / 入链清单 / 其他区块折叠 / Obsidian 跳转 / 复制 wikilink
+
+### 调用
+
+```bash
+# 默认输出到 vault/_graph.html
+python <OBSIDIAN_SKILL_DIR>/obsidian_writer.py --type graph
+
+# 指定输出路径
+python <OBSIDIAN_SKILL_DIR>/obsidian_writer.py --type graph --output /tmp/graph.html
+
+# 预过滤为单一类型（仍可在 sidebar 改）
+python <OBSIDIAN_SKILL_DIR>/obsidian_writer.py --type graph --filter-type topic
+
+# 切到指定 topic 的 ego / mindmap
+python <OBSIDIAN_SKILL_DIR>/obsidian_writer.py --type graph --topic "Topic - RAG"
+
+# 包含 00-Inbox 草稿（默认不含）
+python <OBSIDIAN_SKILL_DIR>/obsidian_writer.py --type graph --include-inbox
+```
+
+### 默认行为
+
+- **排除草稿**：`status: draft` 的笔记不参与拓扑
+- **排除 Inbox**：`00-Inbox/` 默认不扫，用 `--include-inbox` 开启
+- **隐式边**：frontmatter `topic: [X]` 字段也是一条边，前端虚线显示，区别于正文 wikilink
+
+### 使用时机
+
+- 用户说"查看图谱"、"知识图谱"、"笔记关系图"、"思维导图" → 直接运行 `--type graph`
+- 用户问"哪些笔记没归属"、"孤儿笔记" → 优先 `lint`，graph 是次选可视化
+- 用户问"这个 topic 都有哪些资料" → `--type graph --topic <stem>`，让用户切到 Ego 视图
 
 ---
 

@@ -310,10 +310,32 @@ python skills/obsidian/obsidian_writer.py --type lint --auto-fix
 # 重建全局索引 (_index.md)
 python skills/obsidian/obsidian_writer.py --type index
 
+# 生成交互式知识图谱 + 思维导图 HTML (vault/_graph.html)
+python skills/obsidian/obsidian_writer.py --type graph
+python skills/obsidian/obsidian_writer.py --type graph --topic "Topic - RAG"
+python skills/obsidian/obsidian_writer.py --type graph --filter-type topic
+python skills/obsidian/obsidian_writer.py --type graph --include-inbox
+python skills/obsidian/obsidian_writer.py --type graph --output /tmp/g.html
+
 # 预演：只预览不写入
 python skills/obsidian/obsidian_writer.py --type topic --title "RAG" \
   --fields '{}' --dry-run
 ```
+
+### 知识图谱 viewer
+
+`--type graph` 生成一个单文件 HTML（D3 从 CDN 加 SRI hash 加载，零本地依赖），浏览器直接打开即可。包含四种视图：
+
+| 视图 | 适合看什么 |
+|---|---|
+| 📊 Graph 全量力导向 | 整个 vault 的拓扑、中心节点、孤儿 |
+| 🎯 Ego 单 topic 辐射 | 一个 topic 的所有归属资料 |
+| 🗺️ Mindmap (topic) | 单个 topic 的层级结构（H2 区块→wikilink） |
+| 🏥 Health 健康检查 | 5 类问题分组：孤儿 / 含断链 / 草稿 / 陈旧（>90 天） / 空壳 |
+
+**交互**：悬停高亮邻居 / 点击节点弹出右侧**持久** info panel（含类型 chip、关键字段卡片、出链按 H2 分组、入链清单、Obsidian 跳转按钮、复制 wikilink）。
+
+**默认**：排除 draft 笔记 / 排除 `00-Inbox` / frontmatter `topic: [X]` 字段作为隐式边（前端虚线显示）。
 
 ## 开发
 

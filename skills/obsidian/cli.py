@@ -137,6 +137,7 @@ def parse_args(argv=None):
             "topic-scout",
             "live-list",
             "live-run",
+            "graph",
         ],
         help="Note type",
     )
@@ -223,6 +224,26 @@ def parse_args(argv=None):
         action="store_true",
         help="Render and print without writing to disk",
     )
+    parser.add_argument(
+        "--output",
+        default="",
+        help="Output path for --type graph (default: <vault>/_graph.html)",
+    )
+    parser.add_argument(
+        "--filter-type",
+        default="",
+        help="Pre-filter graph viewer to a single node type",
+    )
+    parser.add_argument(
+        "--topic",
+        default="",
+        help="Initial topic stem for ego/mindmap views (default: highest in-degree)",
+    )
+    parser.add_argument(
+        "--include-inbox",
+        action="store_true",
+        help="Include 00-Inbox notes in --type graph (excluded by default)",
+    )
     return parser.parse_args(argv)
 
 
@@ -287,6 +308,38 @@ def main(argv=None):
     if note_type == "index":
         index_path = rebuild_index(vault)
         print(f"[OK] Index rebuilt: {index_path.relative_to(vault)}")
+        return
+
+    # --- Graph: knowledge graph + mindmap viewer ---
+    if note_type == "graph":
+        try:
+            from .graph_builder import build_graph
+            from .graph_view import render_html
+        except ImportError:  # script-mode fallback
+            from graph_builder import build_graph  # type: ignore[no-redef]
+            from graph_view import render_html  # type: ignore[no-redef]
+        graph = build_graph(vault, include_inbox=args.include_inbox)
+        output = Path(args.output) if args.output else None
+        path = render_html(
+            graph,
+            vault,
+            output=output,
+            filter_type=args.filter_type,
+            initial_topic=args.topic,
+        )
+        s = graph.stats()
+        try:
+            rel = path.relative_to(vault)
+            path_label = str(rel)
+        except ValueError:
+            path_label = str(path)
+        print(f"[OK] Graph written to: {path_label}")
+        print(
+            f"  Nodes: {s['nodes']}  ·  Edges: {s['edges']} "
+            f"(explicit {s['explicit']} / implicit {s['implicit']})  ·  "
+            f"Broken: {s['broken']}"
+        )
+        print(f"  Open: file:///{path.as_posix()}")
         return
 
     # --- Query ---

@@ -427,6 +427,12 @@ python skills/obsidian/obsidian_writer.py --type lint --auto-fix
 # Rebuild global index (_index.md)
 python skills/obsidian/obsidian_writer.py --type index
 
+# Render interactive knowledge-graph + mindmap viewer (single HTML)
+python skills/obsidian/obsidian_writer.py --type graph
+python skills/obsidian/obsidian_writer.py --type graph --topic "Topic - RAG"
+python skills/obsidian/obsidian_writer.py --type graph --filter-type topic
+python skills/obsidian/obsidian_writer.py --type graph --include-inbox
+
 # Find literature notes that may be merge targets
 python skills/obsidian/obsidian_writer.py --type merge-candidates --title "Attention Survey"
 
