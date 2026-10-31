@@ -261,25 +261,60 @@ vault 根目录维护两个机器可读事件流：
 
 ## 安装
 
+仓库同时服务 **Claude Code / Codex / WorkBuddy** 三类环境，靠 `install.py` 的 `--target` 切换：
+
 ```bash
-git clone https://github.com/your-username/claude-obsidian.git
+git clone https://gitcode.com/landuochong/claude-obsidian.git
 cd claude-obsidian
-python install.py
+
+# 装到 Claude Code（默认）
+python install.py --target claude
+
+# 装到 Codex
+python install.py --target codex
+
+# 装到 WorkBuddy（自动适配：自然语言触发、python3、注入本机 vault 路径）
+python install.py --target workbuddy
+
+# 三个环境都装
+python install.py --target all
 ```
 
-安装脚本会将 `skills/obsidian/obsidian_writer.py` 复制到 `~/.claude/scripts/`，并将 `skills/obsidian/` 复制到 `~/.claude/skills/obsidian/`。
+- `claude`：把 `skills/obsidian/` 复制到 `~/.claude/skills/obsidian/`，并把 `obsidian_writer.py` 放到 `~/.claude/scripts/`。
+- `codex`：复制到 `~/.codex/skills/obsidian/`。
+- `workbuddy`：调用 `sync_workbuddy.py` 生成适配版（去掉 `/obsidian` slash 命令、改用中文自然语言触发），装到 `~/.workbuddy/skills/obsidian/`。
 
-**配置 vault 路径**（默认：`~/obsidian/`）：
+**配置 vault 路径**（默认：`~/obsidian/`，脚本不展开 `~`，请用绝对路径或环境变量）：
 
 ```bash
-# 方式一：环境变量
+# 方式一：环境变量（推荐，所有脚本统一读取）
 export OBSIDIAN_VAULT_PATH=/path/to/your/vault
 
 # 方式二：调用时传 --vault
 python obsidian_writer.py --vault /path/to/vault ...
 ```
 
-**依赖：** Python 3.9+，Claude Code
+**依赖：** Python 3.9+，零第三方依赖。Claude Code / Codex / WorkBuddy 任选其一。
+
+## 分享给他人 / 上架技能市场
+
+不想让别人 clone 仓库？直接把它做成 **WorkBuddy 技能市场**的一键安装包：
+
+```bash
+# 生成可上架的便携 zip 包（dist/obsidian-skill.zip，不写死任何个人路径）
+python sync_workbuddy.py --pack
+```
+
+然后到 [WorkBuddy 开放平台](https://open.workbuddy.cn) 发布：
+
+1. 注册并做**开发者实名认证**（个人即可，无需写代码）。
+2. 进入 **发布管理 → 新建技能**，上传 `dist/obsidian-skill.zip`，填写名称 / 分类 / 简介。
+3. 提交审核（三道并行：内容合规 + 漏洞扫描 + 模型安全；内测期通常 24h 内出结果）。
+4. 审核通过后**上架**，别人在 WorkBuddy 技能入口搜名字即可安装。
+
+> 想收费？审核通过 ≥1 个免费技能后，可在「收入变现」开通收款账户，再切付费（买断 / 订阅，**发布后不可改**）。
+>
+> 打包规则提示：技能名只能小写字母 / 数字 / 连字符；`description` 不能含尖括号；脚本里不要写死密钥或个人绝对路径（本仓库已处理）。
 
 ## 脚本参考
 

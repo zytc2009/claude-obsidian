@@ -646,6 +646,41 @@ python <OBSIDIAN_SKILL_DIR>/obsidian_writer.py --type lint --auto-fix
 
 ---
 
+## MODE: vault-doctor — 断链体检与修复
+
+**Goal:** 比 `lint` 更聚焦的一类问题——**wikilink 断链**。把断链按"可自动修 / 需人工 / 真缺失"分类，只自动修高置信改名（相似度 >= 0.85 且候选唯一明显领先），其余只报告。
+
+### 调用
+
+```bash
+# 只读体检报告（写文件）
+python <OBSIDIAN_SKILL_DIR>/vault_doctor.py --report <vault>/_broken-links-report.md
+
+# 预演修复（dry-run，不改文件）
+python <OBSIDIAN_SKILL_DIR>/vault_doctor.py --fix
+
+# 真正落地（会自动备份到 ~/.workbuddy/backups/）
+python <OBSIDIAN_SKILL_DIR>/vault_doctor.py --fix --apply
+```
+
+> 所有命令显式带 `--vault "<vault 路径>"`；vault 路径解析见第 0 节。
+
+### 分类
+
+| 分类 | 含义 | 处理 |
+|------|------|------|
+| 误报 | C++ attribute / 外部路径等非笔记链接 | 忽略 |
+| 可自动修 | 笔记被改名、加了后缀，链接未同步 | 一键修（>=0.85） |
+| 需人工 | 有候选但不确定（如两个相似主题） | 你拍板 |
+| 真缺失 | 笔记根本没建（如 Concept/Project 待建卡） | 按需建，本质是待办清单 |
+
+### 使用时机
+
+- 用户说"断链"、"broken links"、"检查断链"、"修一下链接" → 先出报告，再决定是否 `--apply`
+- 强调：**真缺失类不是错误，是待建笔记清单**；"可自动修"类执行前建议先 git commit 当前状态
+
+---
+
 ## MODE: index — 知识库索引维护
 
 **Goal:** 在 vault 根目录生成/重建 `_index.md`，作为全局导航页。

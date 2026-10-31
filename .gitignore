@@ -3,3 +3,5 @@ __pycache__/
 .env
 .idea
 .claude/
+.workbuddy/
+dist/

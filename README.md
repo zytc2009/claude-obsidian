@@ -370,25 +370,44 @@ Required fields per type:
 
 ## Installation
 
+The repo serves **Claude Code / Codex / WorkBuddy** via `install.py --target`:
+
 ```bash
-git clone https://github.com/your-username/claude-obsidian.git
+git clone https://gitcode.com/landuochong/claude-obsidian.git
 cd claude-obsidian
-python install.py
+
+python install.py --target claude      # Claude Code (default)
+python install.py --target codex       # Codex
+python install.py --target workbuddy   # WorkBuddy (auto-adapted: NL triggers, python3, local vault path)
+python install.py --target all         # all three
 ```
 
-This copies `skills/obsidian/obsidian_writer.py` to `~/.claude/scripts/` and `skills/obsidian/` to `~/.claude/skills/obsidian/`.
-
-**Configure your vault path** (default: `~/obsidian/`):
+**Configure your vault path** (default: `~/obsidian/`; scripts don't expand `~`, use an absolute path or env var):
 
 ```bash
-# Option 1: environment variable
 export OBSIDIAN_VAULT_PATH=/path/to/your/vault
-
-# Option 2: pass --vault at call time
-python obsidian_writer.py --vault /path/to/vault ...
+python obsidian_writer.py --vault /path/to/vault ...   # or pass --vault
 ```
 
-**Requirements:** Python 3.9+, Claude Code
+**Requirements:** Python 3.9+, zero third-party deps. Pick any one of Claude Code / Codex / WorkBuddy.
+
+## Share / Publish to the Skill Marketplace
+
+Don't want others to clone? Package it as a one-click WorkBuddy skill:
+
+```bash
+python sync_workbuddy.py --pack   # -> dist/obsidian-skill.zip (no personal paths baked in)
+```
+
+Then publish at [WorkBuddy Open Platform](https://open.workbuddy.cn):
+1. Register + developer verification (personal account is fine, no coding required).
+2. **Publish Management → New Skill**, upload `dist/obsidian-skill.zip`, fill name / category / description.
+3. Submit for review (3 parallel pipelines: content compliance + vulnerability scan + model safety; usually <24h in beta).
+4. Once approved, **list it** — others install by searching the name in WorkBuddy.
+
+> Want to charge? After ≥1 free skill is approved, enable payout in "收入变现", then switch to paid (one-time / subscription — **locked after publish**).
+>
+> Packaging rules: skill `name` only lowercase/digits/hyphens; `description` no angle brackets; no hardcoded secrets or personal absolute paths (this repo handles all of that).
 
 ## Script reference
 
