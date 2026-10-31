@@ -47,9 +47,27 @@ WB_DESCRIPTION = (
     "注意：这是本地 vault 的读写，不是云端文档。"
 )
 
+# 市场上架强制字段（display 展示名 + 中英文描述），缺失会被审核打回
+WB_DISPLAY_NAME = "Obsidian 知识库助手"
+WB_DISPLAY_NAME_EN = "Obsidian Knowledge Base Assistant"
+WB_DESC_ZH = (
+    "在本地 Obsidian 知识库（vault）中读写笔记：闪念速记、网页/文件抓取、对话归档、"
+    "概念卡/主题页/项目笔记写作、双向链接校验与知识图谱可视化。零第三方依赖，纯本地运行。"
+)
+WB_DESC_EN = (
+    "Read and write notes in a local Obsidian vault: quick capture, web/file clipping, "
+    "conversation logging, concept/topic/project note authoring, wikilink linting and "
+    "knowledge-graph visualization. Zero third-party dependencies, fully local."
+)
+
 WB_HEADER = """---
 name: obsidian
+version: 1.0.0
+display_name: {display_name}
+display_name_en: {display_name_en}
 description: {description}
+description_zh: {description_zh}
+description_en: {description_en}
 agent_created: true
 ---
 
@@ -91,7 +109,12 @@ WorkBuddy 没有 `/obsidian` 命令，全部靠自然语言识别。见第 1 节
 # 市场包版 header：不写死任何个人路径/绝对路径，符合上架审核要求
 PORTABLE_HEADER = """---
 name: obsidian
+version: 1.0.0
+display_name: {display_name}
+display_name_en: {display_name_en}
 description: {description}
+description_zh: {description_zh}
+description_en: {description_en}
 agent_created: true
 ---
 
@@ -173,7 +196,14 @@ def build_skill_md(src_text: str, vault: str, skill_dir: str, portable: bool = F
         text = text.replace("<OBSIDIAN_SKILL_DIR>", str(skill_dir))
 
     header = (PORTABLE_HEADER if portable else WB_HEADER).format(
-        description=WB_DESCRIPTION, vault=vault, skill_dir=skill_dir, repo=REPO_ROOT
+        description=WB_DESCRIPTION,
+        display_name=WB_DISPLAY_NAME,
+        display_name_en=WB_DISPLAY_NAME_EN,
+        description_zh=WB_DESC_ZH,
+        description_en=WB_DESC_EN,
+        vault=vault,
+        skill_dir=skill_dir,
+        repo=REPO_ROOT,
     )
     return header + text
 
@@ -254,6 +284,19 @@ def pack_marketplace():
         bad.append("发现尖括号占位符 <OBSIDIAN_SKILL_DIR>")
     if any("/Users/Admin" in p.read_text(encoding="utf-8", errors="ignore") for p in DIST_DIR.rglob("*.py")):
         bad.append("脚本里出现个人绝对路径")
+
+    # frontmatter 上架必填字段校验（缺一个都会被审核打回）
+    required_keys = [
+        "version:",
+        "display_name:",
+        "display_name_en:",
+        "description_zh:",
+        "description_en:",
+    ]
+    fm = full.split("\n---", 1)[0]  # 仅取第一个 --- 之前的 frontmatter
+    for key in required_keys:
+        if key not in fm:
+            bad.append(f"frontmatter 缺少必填字段 {key}")
     if bad:
         print("[ERR] 市场包校验失败：")
         for b in bad:
