@@ -65,9 +65,9 @@ name: obsidian
 version: 1.0.0
 display_name: {display_name}
 display_name_en: {display_name_en}
-description: {description}
-description_zh: {description_zh}
-description_en: {description_en}
+description: "{description}"
+description_zh: "{description_zh}"
+description_en: "{description_en}"
 agent_created: true
 ---
 
@@ -112,9 +112,9 @@ name: obsidian
 version: 1.0.0
 display_name: {display_name}
 display_name_en: {display_name_en}
-description: {description}
-description_zh: {description_zh}
-description_en: {description_en}
+description: "{description}"
+description_zh: "{description_zh}"
+description_en: "{description_en}"
 agent_created: true
 ---
 
@@ -149,6 +149,11 @@ WorkBuddy 没有 `/obsidian` 命令，全部靠自然语言识别。见第 1 节
 ---
 
 """
+
+
+def _yq(s: str) -> str:
+    """把字符串安全地包进 YAML 双引号：转义反斜杠与双引号，避免破坏 frontmatter 解析。"""
+    return s.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def build_skill_md(src_text: str, vault: str, skill_dir: str, portable: bool = False) -> str:
@@ -196,11 +201,11 @@ def build_skill_md(src_text: str, vault: str, skill_dir: str, portable: bool = F
         text = text.replace("<OBSIDIAN_SKILL_DIR>", str(skill_dir))
 
     header = (PORTABLE_HEADER if portable else WB_HEADER).format(
-        description=WB_DESCRIPTION,
+        description=_yq(WB_DESCRIPTION),
         display_name=WB_DISPLAY_NAME,
         display_name_en=WB_DISPLAY_NAME_EN,
-        description_zh=WB_DESC_ZH,
-        description_en=WB_DESC_EN,
+        description_zh=_yq(WB_DESC_ZH),
+        description_en=_yq(WB_DESC_EN),
         vault=vault,
         skill_dir=skill_dir,
         repo=REPO_ROOT,
