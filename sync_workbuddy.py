@@ -61,7 +61,7 @@ WB_DESC_EN = (
 )
 
 WB_HEADER = """---
-name: obsidian
+name: obsidian-vault-manager
 version: 1.0.0
 display_name: {display_name}
 display_name_en: {display_name_en}
@@ -108,7 +108,7 @@ WorkBuddy 没有 `/obsidian` 命令，全部靠自然语言识别。见第 1 节
 
 # 市场包版 header：不写死任何个人路径/绝对路径，符合上架审核要求
 PORTABLE_HEADER = """---
-name: obsidian
+name: obsidian-vault-manager
 version: 1.0.0
 display_name: {display_name}
 display_name_en: {display_name_en}

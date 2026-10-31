@@ -1,5 +1,5 @@
 ---
-name: obsidian
+name: obsidian-vault-manager
 description: Write and organize notes in the Obsidian knowledge base. Handles quick fleeting notes, web/file capture, conversation logging, and archiving related notes. Triggered by /obsidian, or natural language like "记一下", "帮我整理这次对话", "抓取这个网页", "把这些笔记归档".
 ---
 
