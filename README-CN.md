@@ -4,7 +4,7 @@
 
 ## 概述
 
-`claude-obsidian` 连接 Claude Code 会话与 Obsidian。你可以用自然语言或 `/obsidian` 命令捕捉零散想法、归档网页文章、将对话整理成笔记、将相关笔记合并为主题摘要、查询知识库、保持 vault 健康。
+`claude-obsidian` 连接 AI 会话与 Obsidian。你可以用自然语言或 `/obsidian` 命令捕捉零散想法、归档网页文章、将对话整理成笔记、将相关笔记合并为主题摘要、查询知识库、保持 vault 健康。
 
 **架构：**
 ```
