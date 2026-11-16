@@ -1,10 +1,10 @@
-# claude-obsidian
+# obsidian-connector
 
 A Claude Code skill that writes structured notes directly into your local Obsidian vault — no copy-pasting, no manual formatting.
 
 ## Overview
 
-`claude-obsidian` bridges Claude Code sessions and Obsidian. You can capture fleeting thoughts, archive web articles, log conversations as notes, merge related notes into topic summaries, query your knowledge base, and keep your vault healthy — all from natural language or `/obsidian`.
+`obsidian-connector` bridges Claude Code sessions and Obsidian. You can capture fleeting thoughts, archive web articles, log conversations as notes, merge related notes into topic summaries, query your knowledge base, and keep your vault healthy — all from natural language or `/obsidian`.
 
 **Architecture:**
 ```
@@ -373,8 +373,8 @@ Required fields per type:
 The repo serves **Claude Code / Codex / WorkBuddy** via `install.py --target`:
 
 ```bash
-git clone https://gitcode.com/landuochong/claude-obsidian.git
-cd claude-obsidian
+git clone https://gitcode.com/landuochong/claude-obsidian.git obsidian-connector
+cd obsidian-connector
 
 python install.py --target claude      # Claude Code (default)
 python install.py --target codex       # Codex

@@ -1,10 +1,10 @@
-# claude-obsidian
+# Obsidian 连接器
 
 在 Claude Code 会话中直接向本地 Obsidian 知识库写入结构化笔记，无需复制粘贴，无需手动排版。
 
 ## 概述
 
-`claude-obsidian` 连接 AI 会话与 Obsidian。你可以用自然语言或 `/obsidian` 命令捕捉零散想法、归档网页文章、将对话整理成笔记、将相关笔记合并为主题摘要、查询知识库、保持 vault 健康。
+`Obsidian 连接器` 连接 AI 会话与 Obsidian。你可以用自然语言或 `/obsidian` 命令捕捉零散想法、归档网页文章、将对话整理成笔记、将相关笔记合并为主题摘要、查询知识库、保持 vault 健康。
 
 **架构：**
 ```
@@ -264,8 +264,8 @@ vault 根目录维护两个机器可读事件流：
 仓库同时服务 **Claude Code / Codex / WorkBuddy** 三类环境，靠 `install.py` 的 `--target` 切换：
 
 ```bash
-git clone https://gitcode.com/landuochong/claude-obsidian.git
-cd claude-obsidian
+git clone https://gitcode.com/landuochong/claude-obsidian.git obsidian-connector
+cd obsidian-connector
 
 # 装到 Claude Code（默认）
 python install.py --target claude

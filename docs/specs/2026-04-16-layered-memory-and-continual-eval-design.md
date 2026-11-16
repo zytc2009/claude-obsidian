@@ -2,13 +2,13 @@
 
 **Date:** 2026-04-16
 **Status:** Draft
-**Scope:** Add a session-memory layer, elevate `topic` notes into a middle memory layer, and introduce continual-memory evaluation for `claude-obsidian`
+**Scope:** Add a session-memory layer, elevate `topic` notes into a middle memory layer, and introduce continual-memory evaluation for `Obsidian 连接器`
 
 ---
 
 ## 1. Problem
 
-`claude-obsidian` already has two useful memory primitives:
+`Obsidian 连接器` already has two useful memory primitives:
 
 - the vault as the authoritative long-term knowledge store
 - `_memory.jsonl` as a lightweight activation-based hot cache
@@ -396,7 +396,7 @@ That sequence matters. Better organize behavior reduces fragmentation; the metri
 ## 11. Non-Goals
 
 - importing `nested_learning` runtime code or adding Torch dependencies
-- implementing CMS neural mechanisms directly inside `claude-obsidian`
+- implementing CMS neural mechanisms directly inside `Obsidian 连接器`
 - replacing lexical retrieval with embeddings in this iteration
 - auto-generating topic content without explicit user confirmation/update flows
 

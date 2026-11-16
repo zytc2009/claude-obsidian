@@ -2,13 +2,13 @@
 
 **Date:** 2026-04-13
 **Status:** Proposed
-**Scope:** Extend `claude-obsidian` from note writing into lightweight knowledge compilation
+**Scope:** Extend `Obsidian 连接器` from note writing into lightweight knowledge compilation
 
 ---
 
 ## 1. Goal
 
-`claude-obsidian` already handles structured note writing well:
+`Obsidian 连接器` already handles structured note writing well:
 
 - capture raw material into `literature`
 - write `concept`, `topic`, and `project` notes
@@ -436,7 +436,7 @@ This spec is successful when:
 
 ## 13. Design Summary
 
-The right next step for `claude-obsidian` is not to become a full Karpathy-style wiki.
+The right next step for `Obsidian 连接器` is not to become a full Karpathy-style wiki.
 
 The right next step is smaller:
 

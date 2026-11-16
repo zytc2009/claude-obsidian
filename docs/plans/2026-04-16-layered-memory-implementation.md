@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-16
 **Status:** Ready
-**Scope:** Implement session memory, topic-linked activation memory, and continual-memory evaluation in `claude-obsidian`
+**Scope:** Implement session memory, topic-linked activation memory, and continual-memory evaluation in `Obsidian 连接器`
 
 ---
 

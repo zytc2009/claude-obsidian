@@ -149,7 +149,7 @@ _TEMPLATE = r"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>知识图谱 · claude-obsidian</title>
+<title>知识图谱 · Obsidian 连接器</title>
 <script src="__D3_URL__"
         integrity="__D3_INTEGRITY__"
         crossorigin="anonymous"></script>
@@ -337,7 +337,7 @@ _TEMPLATE = r"""<!DOCTYPE html>
 <body>
 <div id="app">
   <aside id="sidebar">
-    <h1>🌳 claude-obsidian</h1>
+    <h1>🌳 Obsidian 连接器</h1>
     <div class="subtitle">Knowledge Graph + Mindmap</div>
 
     <div class="section">

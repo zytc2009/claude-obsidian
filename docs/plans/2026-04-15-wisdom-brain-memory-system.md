@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**目标：** 在 claude-obsidian 中新增双层活性记忆系统，让 Agent 自动"记住"最近活跃的概念，并在每次对话时自动注入相关记忆上下文。
+**目标：** 在 Obsidian 连接器 中新增双层活性记忆系统，让 Agent 自动"记住"最近活跃的概念，并在每次对话时自动注入相关记忆上下文。
 
 **架构：** 新增 `memory_manager.py` 模块管理 `_memory.jsonl` 持久化词库；扩展 `obsidian_writer.py` 在写笔记时自动提取词条；扩展 `SKILL.md` 自动注入记忆上下文并处理 `/obsidian memory` 命令。
 

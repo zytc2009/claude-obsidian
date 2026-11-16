@@ -1069,7 +1069,7 @@ CLAUDE_DIR="$HOME/.claude"
 SCRIPTS_DIR="$CLAUDE_DIR/scripts"
 SKILLS_DIR="$CLAUDE_DIR/skills"
 
-echo "Installing claude-obsidian..."
+echo "Installing obsidian-connector..."
 
 cp scripts/obsidian_writer.py "$SCRIPTS_DIR/obsidian_writer.py"
 echo "  ✓ Script  → $SCRIPTS_DIR/obsidian_writer.py"
@@ -1090,7 +1090,7 @@ chmod +x install.sh && ./install.sh
 
 Expected output:
 ```
-Installing claude-obsidian...
+Installing obsidian-connector...
   ✓ Script  → /Users/<you>/.claude/scripts/obsidian_writer.py
   ✓ Skill   → /Users/<you>/.claude/skills/obsidian
 Done. Use /obsidian in any Claude Code session.

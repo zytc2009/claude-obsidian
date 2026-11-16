@@ -2,13 +2,13 @@
 
 **Date:** 2026-04-19
 **Status:** Implemented
-**Scope:** Add personal profile management and article generation to `claude-obsidian`
+**Scope:** Add personal profile management and article generation to `Obsidian 连接器`
 
 ---
 
 ## 1. Context
 
-`claude-obsidian` 已经能捕获和组织知识，但缺少两个关键能力：
+`Obsidian 连接器` 已经能捕获和组织知识，但缺少两个关键能力：
 
 1. **没有"我是谁"的上下文** — Agent 在写笔记、查询时不知道用户的身份、偏好和项目背景，产出是通用知识而不是个人化知识。
 

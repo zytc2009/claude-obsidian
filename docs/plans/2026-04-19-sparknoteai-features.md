@@ -1087,7 +1087,7 @@ Expected: all 8 tests PASS
 ```python
 # skills/obsidian/task_runner.py
 """
-Async import task runner for claude-obsidian.
+Async import task runner for obsidian-connector.
 
 Commands:
   submit  --vault VAULT --url URL [--url URL ...]   Add URLs to queue, print task IDs

@@ -48,8 +48,8 @@ WB_DESCRIPTION = (
 )
 
 # 市场上架强制字段（display 展示名 + 中英文描述），缺失会被审核打回
-WB_DISPLAY_NAME = "Obsidian 知识库助手"
-WB_DISPLAY_NAME_EN = "Obsidian Knowledge Base Assistant"
+WB_DISPLAY_NAME = "Obsidian 连接器"
+WB_DISPLAY_NAME_EN = "Obsidian Connector"
 WB_DESC_ZH = (
     "在本地 Obsidian 知识库（vault）中读写笔记：闪念速记、网页/文件抓取、对话归档、"
     "概念卡/主题页/项目笔记写作、双向链接校验与知识图谱可视化。零第三方依赖，纯本地运行。"
@@ -61,7 +61,7 @@ WB_DESC_EN = (
 )
 
 WB_HEADER = """---
-name: obsidian-fleeting-capture
+name: obsidian-connector
 version: 1.0.0
 display_name: {display_name}
 display_name_en: {display_name_en}
@@ -71,7 +71,7 @@ description_en: "{description_en}"
 agent_created: true
 ---
 
-# Obsidian 知识库管理（WorkBuddy 版）
+# Obsidian 连接器（WorkBuddy 版）
 
 You are managing the user's local Obsidian vault at `{vault}`.
 
@@ -108,7 +108,7 @@ WorkBuddy 没有 `/obsidian` 命令，全部靠自然语言识别。见第 1 节
 
 # 市场包版 header：不写死任何个人路径/绝对路径，符合上架审核要求
 PORTABLE_HEADER = """---
-name: obsidian-fleeting-capture
+name: obsidian-connector
 version: 1.0.0
 display_name: {display_name}
 display_name_en: {display_name_en}
@@ -118,7 +118,7 @@ description_en: "{description_en}"
 agent_created: true
 ---
 
-# Obsidian 知识库管理（WorkBuddy 技能版）
+# Obsidian 连接器（WorkBuddy 技能版）
 
 You are managing the user's local Obsidian vault.
 
